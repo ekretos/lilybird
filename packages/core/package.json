@@ -37,6 +37,7 @@
   ],
   "scripts": {
     "check": "eslint \"src/**/*.ts\"",
+    "test": "bun test src/**/*.test.ts",
     "build": "rm -rf dist && tsc && cp .npmignore dist/"
   },
   "repository": {
@@ -50,11 +51,11 @@
   "keywords": [
     "lilybird",
     "discord",
-    "wrapper",
     "client",
     "discord-api",
     "discord-client",
     "discord-wrapper",
+    "discord-bot",
     "bun",
     "bunjs",
     "bun-first",
