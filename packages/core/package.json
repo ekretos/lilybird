@@ -1,64 +1,23 @@
 {
   "name": "lilybird",
-  "version": "0.8.0",
+  "version": "0.9.0-beta.4",
   "description": "A bun-first discord api wrapper written in TS",
   "main": "./dist/index.js",
   "author": "DidaS",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    },
-    "./rest": {
-      "types": "./dist/http/rest.d.ts",
-      "import": "./dist/http/rest.js",
-      "default": "./dist/http/rest.js"
-    },
-    "./cdn": {
-      "types": "./dist/http/cdn.d.ts",
-      "import": "./dist/http/cdn.js",
-      "default": "./dist/http/cdn.js"
-    },
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./rest": { "types": "./dist/http/rest.d.ts", "import": "./dist/http/rest.js", "default": "./dist/http/rest.js" },
+    "./cdn": { "types": "./dist/http/cdn.d.ts", "import": "./dist/http/cdn.js", "default": "./dist/http/cdn.js" },
     "./package.json": "./package.json"
   },
-  "imports": {
-    "#enums": "./dist/enums/index.js",
-    "#ws": "./dist/ws/manager.js"
-  },
-  "engines": {
-    "bun": ">=1.1.0",
-    "node": ">=21.0.0"
-  },
-  "files": [
-    "./dist"
-  ],
-  "scripts": {
-    "check": "eslint \"src/**/*.ts\"",
-    "test": "bun test src/**/*.test.ts",
-    "build": "rm -rf dist && tsc && cp .npmignore dist/"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Didas-git/lilybird.git"
-  },
+  "imports": { "#enums": "./dist/enums/index.js", "#ws": "./dist/ws/manager.js" },
+  "engines": { "bun": ">=1.1.0", "node": ">=21.0.0" },
+  "files": ["./dist"],
+  "scripts": { "check": "eslint \"src/**/*.ts\"", "test": "bun test src/**/*.test.ts", "build": "rm -rf dist && tsc && cp .npmignore dist/" },
+  "repository": { "type": "git", "url": "git+https://github.com/Didas-git/lilybird.git" },
   "homepage": "https://github.com/Didas-git/lilybird/tree/main/packages/core",
-  "bugs": {
-    "url": "https://github.com/Didas-git/lilybird/issues"
-  },
-  "keywords": [
-    "lilybird",
-    "discord",
-    "client",
-    "discord-api",
-    "discord-client",
-    "discord-wrapper",
-    "discord-bot",
-    "bun",
-    "bunjs",
-    "bun-first",
-    "esm"
-  ]
+  "bugs": { "url": "https://github.com/Didas-git/lilybird/issues" },
+  "keywords": ["lilybird", "discord", "client", "discord-api", "discord-client", "discord-wrapper", "discord-bot", "bun", "bunjs", "bun-first", "esm"]
 }
