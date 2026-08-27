@@ -33,13 +33,17 @@ export class Client implements MockClient {
     public constructor(options: ClientOptions, debug?: DebugFunction) {
         this.rest = options.useDebugRest === true ? new DebugREST(debug) : new REST();
         this.cache = typeof options.cachingManager !== "undefined" ? options.cachingManager : new CachingManager();
-        this.ws = new WebSocketManager({ intents: options.intents, presence: options.presence }, undefined, debug);
         this.#dispatch = options.dispatch;
+        this.ws = new WebSocketManager(
+            { intents: options.intents, presence: options.presence },
+            (payload) => this.#dispatch?.(payload),
+            debug
+        );
     }
 
     public async login(token: string, dispatch: DispatchFunction | undefined = this.#dispatch): Promise<string> {
         if (typeof dispatch === "undefined") throw new Error("the client doesn't have any 'dispatch' function defined.");
-        this.ws.init(token, dispatch);
+        (this as { "#dispatch"?: DispatchFunction });
         this.rest.setToken(token);
         await this.ws.connect();
         return token;
@@ -65,6 +69,7 @@ export interface CreateClientOptions<T extends Transformers<any>> extends Omit<C
 }
 
 export async function createClient<T extends Transformers<Client> = Transformers<Client>>(options: CreateClientOptions<T>): Promise<Client> {
+    let dispatch: DispatchFunction | undefined;
     const compiler = new ListenerCompiler<Client, T>({ transformers: options.transformers, transformClient: options.transformClient });
     compiler.addListenersFromObject(options.listeners);
     if (typeof options.caching !== "undefined") compiler.appendCachingHandlers(options.caching);
@@ -73,9 +78,11 @@ export async function createClient<T extends Transformers<Client> = Transformers
         intents: options.intents,
         presence: options.presence,
         useDebugRest: typeof options.debug !== "undefined",
-        cachingManager: options.cachingManager
+        cachingManager: options.cachingManager,
+        dispatch: (payload) => dispatch?.(payload)
     }, options.debug);
 
-    await client.login(options.token, compiler.getDispatchFunction(client, client.ws.resumeInfo));
+    dispatch = compiler.getDispatchFunction(client, client.ws.resumeInfo);
+    await client.login(options.token, dispatch);
     return client;
 }
