@@ -81,7 +81,7 @@ export class Handler {
             const event: Event = (await import(join(dir, fileName))).default;
             if (typeof event === "undefined") continue;
 
-            this.events.set(event.event, event);
+            this.events.set(<string>event.event, event);
         }
 
         return true;

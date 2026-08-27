@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "check": "eslint \"src/**/*.ts\"",
-    "build": "rm -rf dist && tsc && cp .npmignore dist/ && cp -r src/templates dist/templates",
+    "build": "rm -rf dist && tsc && cp .npmignore dist/ && cp -R src/templates dist/templates",
     "dev": "bun src/index.ts"
   },
   "repository": {

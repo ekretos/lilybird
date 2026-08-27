@@ -16,26 +16,26 @@ import type {
     Listeners
 } from "./typings/index.js";
 
-type GetUserType<T extends Transformers<any>> = (T["userUpdate"] & {}) extends { handler: ((...args: infer U) => infer R) }
+type GetUserType<T extends Transformers> = (T["userUpdate"] & {}) extends { handler: ((...args: infer U) => infer R) }
     ? unknown extends R ? U[1] : R
     : never;
 
-export class Client implements MockClient {
+export class Client<T extends Transformers = Transformers, C extends CacheManagerStructure = CacheManagerStructure> implements MockClient {
     public readonly rest: REST;
-    public readonly cache: CacheManagerStructure;
+    public readonly cache: C;
     public readonly ws: WebSocketManager;
-    public readonly declare user: GetUserType<Transformers<this>>;
+    public readonly declare user: GetUserType<T>;
     public readonly declare sessionId: string;
     public readonly declare application: Application.Structure;
     protected readonly declare ready: boolean;
     #dispatch?: DispatchFunction;
 
-    public constructor(options: ClientOptions, debug?: DebugFunction) {
+    public constructor(options: ClientOptions<T>, debug?: DebugFunction) {
         this.rest = options.useDebugRest === true ? new DebugREST(debug) : new REST();
-        this.cache = typeof options.cachingManager !== "undefined" ? options.cachingManager : new CachingManager();
+        this.cache = typeof options.cachingManager !== "undefined" ? <C>options.cachingManager : <C><unknown> new CachingManager();
         this.#dispatch = options.dispatch;
         this.ws = new WebSocketManager(
-            { intents: options.intents, presence: options.presence },
+            { intents: Array.isArray(options.intents) ? options.intents.reduce((acc, cur) => acc | cur, 0) : options.intents, presence: options.presence },
             (payload) => this.#dispatch?.(payload),
             debug
         );
@@ -62,19 +62,19 @@ export class Client implements MockClient {
     }
 }
 
-export interface CreateClientOptions<T extends Transformers<any>> extends Omit<ClientOptions, "dispatch">, CompilerOptions<T> {
+export interface CreateClientOptions<T extends Transformers> extends Omit<ClientOptions<T>, "dispatch">, CompilerOptions<T> {
     token: string;
-    listeners: Listeners<Client, T>;
+    listeners: Listeners<Client<T>, T>;
     caching?: CachingOptions;
     debug?: DebugFunction;
 }
 
-export async function createClient<T extends Transformers<Client> = Transformers<Client>>(options: CreateClientOptions<T>): Promise<Client> {
-    const compiler = new ListenerCompiler<Client, T>({ transformers: options.transformers, transformClient: options.transformClient });
+export async function createClient<T extends Transformers<Client<any>> = Transformers<Client<any>>>(options: CreateClientOptions<T>): Promise<Client<T>> {
+    const compiler = new ListenerCompiler<Client<T>, T>({ transformers: options.transformers, transformClient: options.transformClient });
     compiler.addListenersFromObject(options.listeners);
     if (typeof options.caching !== "undefined") compiler.appendCachingHandlers(options.caching);
 
-    const client = new Client({
+    const client = new Client<T>({
         intents: options.intents,
         presence: options.presence,
         useDebugRest: typeof options.debug !== "undefined",
