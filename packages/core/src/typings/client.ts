@@ -1,7 +1,6 @@
 import type { CachingManager } from "../cache/manager.js";
 import type { CacheManagerStructure } from "./cache-manager.js";
 import type { Awaitable } from "./utils.js";
-import type { Client } from "../client.js";
 import type { DispatchFunction } from "../ws/manager.js";
 import type { Application } from "./application.js";
 
@@ -10,7 +9,7 @@ import type {
     ApplicationCommandPermissionsUpdate, AutoModerationActionExecution, GuildScheduledEventUserRemove, GuildScheduledEventUserAdd,
     MessageReactionRemoveEmoji, GuildScheduledEventCreate, GuildScheduledEventDelete, GuildScheduledEventUpdate, AutoModerationRuleCreate,
     AutoModerationRuleDelete, AutoModerationRuleUpdate, GuildAuditLogEntryCreate, MessageReactionRemoveAll, UpdatePresenceStructure,
-    GuildIntegrationsUpdate, MessageReactionRemove, MessagePollVoteRemove, ReceiveDispatchEvent, GuildStickersUpdate, StageInstanceCreate,
+    GuildIntegrationsUpdate, MessageReactionRemove, MessagePollVoteRemove, GuildStickersUpdate, StageInstanceCreate,
     StageInstanceUpdate, ThreadMembersUpdate, MessageReactionAdd, MessagePollVoteAdd, ThreadMemberUpdate, MessageDeleteBulk, IntegrationCreate,
     IntegrationDelete, IntegrationUpdate, InteractionCreate, VoiceServerUpdate, ChannelPinsUpdate, GuildMemberRemove, GuildEmojisUpdate,
     GuildMemberUpdate, GuildMembersChunk, VoiceStateUpdate, GuildRoleCreate, GuildRoleUpdate, PresenceUpdate, ThreadListSync, GuildRoleDelete,
@@ -28,9 +27,9 @@ export type Listeners<C, T extends Transformers<C>> = {
             ? ((...args: U) => Awaitable<unknown>) : never
 };
 
-export type Transformer<C, T> = { return: TransformerReturnType, handler: (...args: [client: C, payload: T]) => unknown };
+export type Transformer<C = any, T = any> = { return: TransformerReturnType, handler: (...args: [client: C, payload: T]) => unknown };
 
-export interface Transformers<C> {
+export interface Transformers<C = any> {
     setup?: Transformer<C, Ready["d"]>; ready?: Transformer<C, Ready["d"]>; resumed?: Transformer<C, undefined>;
     applicationCommandPermissionsUpdate?: Transformer<C, ApplicationCommandPermissionsUpdate["d"]>;
     autoModerationRuleCreate?: Transformer<C, AutoModerationRuleCreate["d"]>; autoModerationRuleUpdate?: Transformer<C, AutoModerationRuleUpdate["d"]>;
