@@ -1,4 +1,4 @@
-/* eslint-disable @stylistic/max-len, @stylistic/max-statements-per-line, @typescript-eslint/no-implied-eval, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return */
+/* eslint-disable @stylistic/max-len, @typescript-eslint/no-implied-eval */
 
 import {
     CachingDelegationType,
@@ -20,7 +20,7 @@ import type {
     Ready
 } from "./typings/index.js";
 
-export interface CompilerOptions<T extends Transformers<any>> {
+export interface CompilerOptions<T extends Transformers> {
     transformers?: T;
     transformClient?: boolean;
 }
@@ -45,7 +45,7 @@ export class ListenerCompiler<C extends MockClient, T extends Transformers<C>> {
         extra: { when: CacheExecutionPolicy, content: string } | undefined = undefined
     ): void {
         const handler = this.#callbacks.get(name);
-        const transformer: Transformer<C, any> = this.#transformers[<never>name];
+        const transformer: Transformer<C> = this.#transformers[<never>name];
         const temp = [`else if(payload.t === "${event}"){`];
         const transf = `t_${name}`;
         if (typeof transformer !== "undefined") {

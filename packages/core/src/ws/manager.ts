@@ -68,7 +68,7 @@ export class WebSocketManager {
         const generation = ++this.#generation;
         this.#clearTimer();
         this.#heartbeatPending = false;
-        const ws = <Socket>new WebSocket(url);
+        const ws = <Socket> new WebSocket(url);
         this.#ws = ws;
 
         ws.addEventListener("open", () => {
@@ -101,8 +101,7 @@ export class WebSocketManager {
             if (generation !== this.#generation) return;
             this.#debug?.(DebugIdentifier.WSMessage, event.data);
             let payload: Payload;
-            try { payload = <Payload>JSON.parse(String(event.data)); }
-            catch { ws.close(1002); return; }
+            try { payload = <Payload>JSON.parse(String(event.data)); } catch { ws.close(1002); return; }
             if (typeof payload.s === "number") this.#sequenceNumber = payload.s;
 
             switch (payload.op) {
@@ -123,8 +122,7 @@ export class WebSocketManager {
                     break;
                 case GatewayOpCode.InvalidSession:
                     this.#debug?.(DebugIdentifier.InvalidSession);
-                    if (payload.d === true && this.#canResume()) { this.#isResuming = true; ws.close(1001); }
-                    else { this.#isResuming = false; this.#sequenceNumber = null; this.#clearResumeInfo(); ws.close(1000); }
+                    if (payload.d && this.#canResume()) { this.#isResuming = true; ws.close(1001); } else { this.#isResuming = false; this.#sequenceNumber = null; this.#clearResumeInfo(); ws.close(1000); }
                     break;
                 case GatewayOpCode.HeartbeatACK:
                     this.#gotACK = true;
@@ -140,7 +138,7 @@ export class WebSocketManager {
     async #getGatewayUrl(): Promise<string> {
         if (typeof this.#gatewayInfo === "undefined") {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15_000);
+            const timeout = setTimeout(() => { controller.abort(); }, 15_000);
             let response: Response;
             try {
                 response = await fetch("https://discord.com/api/v10/gateway/bot", { headers: { Authorization: `Bot ${this.#options.token}` }, signal: controller.signal });
@@ -197,9 +195,9 @@ export class WebSocketManager {
 
     #resume(): void {
         if (!this.#canResume()) { this.#isResuming = false; this.#identify(); return; }
-        const token = this.#options.token;
+        const { token } = this.#options;
         if (typeof token === "undefined") throw new Error("No token was found");
-        const payload: Resume = { op: GatewayOpCode.Resume, d: { token, session_id: this.resumeInfo.id, seq: this.#sequenceNumber as number }, s: null, t: null };
+        const payload: Resume = { op: GatewayOpCode.Resume, d: { token, session_id: this.resumeInfo.id, seq: this.#sequenceNumber! }, s: null, t: null };
         this.#debug?.(DebugIdentifier.Resume);
         this.#ws?.send(JSON.stringify(payload));
     }
@@ -228,9 +226,9 @@ export class WebSocketManager {
         if (typeof this.#ws === "undefined" || typeof this.#ws.ping !== "function") throw new Error("WebSocket is not connected");
         return new Promise((resolve, reject) => {
             const start = performance.now();
-            const timeout = setTimeout(() => reject(new Error("WebSocket ping timed out")), 5_000);
+            const timeout = setTimeout(() => { reject(new Error("WebSocket ping timed out")); }, 5_000);
             this.#ws?.addEventListener("pong", () => { clearTimeout(timeout); resolve(performance.now() - start); }, { once: true });
-            this.#ws?.ping?.();
+            this.#ws?.ping();
         });
     }
 

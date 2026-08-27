@@ -235,7 +235,7 @@ export class Handler<T extends Transformers = Transformers, U extends boolean = 
             const listener = this.compileCommands();
             if (listener === null) return obj as never;
             if ("interactionCreate" in obj) {
-                obj.interactionCreate = (client: Client<Transformers, CacheManagerStructure>, interaction: Interaction.Structure) => {
+                obj.interactionCreate = (client: Client, interaction: Interaction.Structure) => {
                     // @ts-expect-error The obj constant is not typed
                     obj.interactionCreate(client, interaction);
                     listener(client, interaction);

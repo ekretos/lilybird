@@ -168,7 +168,7 @@ export class REST {
     async #request<T>(method: RequestMethod, path: string, opts: RequestInit): Promise<T> {
         for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), this.#timeout);
+            const timeout = setTimeout(() => { controller.abort(); }, this.#timeout);
             opts.signal = controller.signal;
 
             let response: Response;
