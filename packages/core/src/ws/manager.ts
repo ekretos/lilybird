@@ -1,5 +1,4 @@
 import { DebugIdentifier, GatewayOpCode } from "#enums";
-import { setTimeout } from "node:timers/promises";
 
 import type {
     UpdatePresenceStructure,
@@ -16,9 +15,17 @@ interface ManagerOptions {
     token?: string;
     intents: number;
     presence?: UpdatePresenceStructure;
+    reconnect?: boolean;
+    maxReconnectAttempts?: number;
+    reconnectBaseDelay?: number;
+    reconnectMaxDelay?: number;
 }
 
 export type DispatchFunction = (data: ReceiveDispatchEvent) => any;
+
+type Socket = WebSocket & {
+    ping?: () => void;
+};
 
 export class WebSocketManager {
     readonly #dispatch: DispatchFunction;
@@ -26,133 +33,225 @@ export class WebSocketManager {
 
     #sequenceNumber: number | null = null;
     #isResuming = false;
-    #ws!: WebSocket;
-    #gatewayInfo!: GetGatewayBotResponse;
+    #ws?: Socket;
+    #gatewayInfo?: GetGatewayBotResponse;
     #options: Required<ManagerOptions>;
-    #timer?: Timer;
-    // eslint-disable-next-line @typescript-eslint/naming-convention
-    #gotACK: boolean = true;
+    #timer?: ReturnType<typeof setInterval>;
+    #reconnectTimer?: ReturnType<typeof setTimeout>;
+    #reconnectAttempts = 0;
+    #generation = 0;
+    #closed = false;
+    #gotACK = true;
+    #heartbeatInterval = 0;
+    #heartbeatPending = false;
 
-    // Should i use symbols...?
     public readonly resumeInfo: {
         url: string,
         id: string
     } = <never>{};
 
     public constructor(options: ManagerOptions, dispatch: DispatchFunction, debug?: DebugFunction) {
-        if (typeof options.intents !== "number" && Number.isNaN(options.intents)) throw new Error("Invalid intents");
+        if (typeof options.intents !== "number" || Number.isNaN(options.intents)) throw new Error("Invalid intents");
 
         this.#dispatch = dispatch;
         this.#debug = debug;
-        this.#options = <never>options;
+        this.#options = {
+            reconnect: true,
+            maxReconnectAttempts: Infinity,
+            reconnectBaseDelay: 1_000,
+            reconnectMaxDelay: 30_000,
+            ...options
+        };
     }
 
     public close(): void {
-        this.#ws.close(3000);
+        this.#closed = true;
+        this.#clearReconnectTimer();
+        this.#clearTimer();
+        this.#ws?.close(3000);
+        this.#ws = undefined;
+        this.#isResuming = false;
+        this.#heartbeatPending = false;
     }
 
     public async connect(url?: string): Promise<void> {
-        if (typeof this.#gatewayInfo === "undefined") {
-            const response = await fetch("https://discord.com/api/v10/gateway/bot", {
-                headers: {
-                    Authorization: `Bot ${this.#options.token}`
+        this.#closed = false;
+        this.#clearReconnectTimer();
+        await this.#connect(url ?? this.#getGatewayUrl());
+    }
+
+    async #connect(url: string): Promise<void> {
+        const generation = ++this.#generation;
+        this.#clearTimer();
+        this.#heartbeatPending = false;
+
+        const ws = <Socket>new WebSocket(url);
+        this.#ws = ws;
+
+        ws.addEventListener("open", () => {
+            if (generation !== this.#generation) return;
+            this.#reconnectAttempts = 0;
+        });
+
+        ws.addEventListener("error", (err) => {
+            if (generation !== this.#generation) return;
+            this.#debug?.(DebugIdentifier.WSError, err);
+        });
+
+        ws.addEventListener("close", ({ code }) => {
+            if (generation !== this.#generation) return;
+            this.#debug?.(DebugIdentifier.CloseCode, code);
+            this.#clearTimer();
+            this.#heartbeatPending = false;
+            if (this.#closed || code === 3000) return;
+
+            if (code === 4004) {
+                this.#isResuming = false;
+                this.#debug?.(DebugIdentifier.InvalidSession);
+                return;
+            }
+
+            if (code === 4010 || code === 4011 || code === 4012 || code === 4013 || code === 4014) {
+                this.#isResuming = false;
+                return;
+            }
+
+            if (code === 4007 || code === 4009) {
+                this.#isResuming = false;
+                this.#sequenceNumber = null;
+            }
+
+            if (code >= 4000 && code < 5000 && code !== 4007 && code !== 4008 && code !== 4009) {
+                this.#scheduleReconnect(false);
+                return;
+            }
+
+            this.#scheduleReconnect(this.#canResume());
+        });
+
+        ws.addEventListener("message", (event) => {
+            if (generation !== this.#generation) return;
+            this.#debug?.(DebugIdentifier.WSMessage, event.data);
+
+            let payload: Payload;
+            try {
+                payload = <Payload>JSON.parse(String(event.data));
+            } catch {
+                ws.close(1002);
+                return;
+            }
+
+            if (typeof payload.s === "number") this.#sequenceNumber = payload.s;
+
+            switch (payload.op) {
+                case GatewayOpCode.Dispatch:
+                    this.#dispatch(payload);
+                    break;
+                case GatewayOpCode.Hello: {
+                    const interval = payload.d.heartbeat_interval;
+                    this.#startTimer(interval);
+                    if (this.#isResuming && this.#canResume()) this.#resume();
+                    else {
+                        this.#isResuming = false;
+                        this.#identify();
+                    }
+                    break;
                 }
-            });
+                case GatewayOpCode.Heartbeat:
+                    this.#sendHeartbeatPayload();
+                    break;
+                case GatewayOpCode.Reconnect:
+                    ws.close(1001);
+                    break;
+                case GatewayOpCode.InvalidSession:
+                    this.#debug?.(DebugIdentifier.InvalidSession);
+                    if (payload.d === true && this.#canResume()) {
+                        this.#isResuming = true;
+                        ws.close(1001);
+                    } else {
+                        this.#isResuming = false;
+                        this.#sequenceNumber = null;
+                        this.#clearResumeInfo();
+                        ws.close(1000);
+                    }
+                    break;
+                case GatewayOpCode.HeartbeatACK:
+                    this.#gotACK = true;
+                    this.#heartbeatPending = false;
+                    this.#debug?.(DebugIdentifier.ACK);
+                    break;
+                default:
+                    break;
+            }
+        });
+    }
+
+    async #getGatewayUrl(): Promise<string> {
+        if (typeof this.#gatewayInfo === "undefined") {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15_000);
+            let response: Response;
+            try {
+                response = await fetch("https://discord.com/api/v10/gateway/bot", {
+                    headers: {
+                        Authorization: `Bot ${this.#options.token}`
+                    },
+                    signal: controller.signal
+                });
+            } finally {
+                clearTimeout(timeout);
+            }
 
             if (!response.ok) throw new Error("An invalid Token was provided");
-
             const data: GetGatewayBotResponse = await response.json() as never;
-
             data.url = `${data.url}/?v=10&encoding=json`;
             this.#gatewayInfo = data;
         }
 
-        this.#ws = new WebSocket(url ?? this.#gatewayInfo.url);
-        this.#ws.addEventListener("error", (err) => {
-            this.#debug?.(DebugIdentifier.WSError, err);
-        });
-        this.#ws.addEventListener("close", async ({ code }) => {
-            this.#debug?.(DebugIdentifier.CloseCode, code);
-            this.#clearTimer();
-            if (code === 3000) return;
-            if (code === 4010) throw new Error("Invalid Shard");
-            if (code === 4011) throw new Error("Sharding Required");
-            if (code === 4012) throw new Error("Invalid API Version");
-            if (code === 4013) throw new Error("Invalid intent(s)");
-            if (code === 4014) throw new Error("Disallowed intent(s)");
-            if (typeof code === "undefined" || code === 1001 || closeCodeAllowsReconnection(code)) {
-                await this.#attemptResume();
-                return;
+        return this.#gatewayInfo.url;
+    }
+
+    #canResume(): boolean {
+        return typeof this.resumeInfo.id === "string" && this.resumeInfo.id.length > 0 && this.#sequenceNumber !== null;
+    }
+
+    #scheduleReconnect(resume: boolean): void {
+        if (!this.#options.reconnect || this.#closed || this.#reconnectTimer !== undefined) return;
+        if (this.#reconnectAttempts >= this.#options.maxReconnectAttempts) return;
+
+        this.#isResuming = resume && this.#canResume();
+        const attempt = this.#reconnectAttempts++;
+        const exponential = Math.min(this.#options.reconnectBaseDelay * 2 ** attempt, this.#options.reconnectMaxDelay);
+        const delay = exponential + Math.floor(Math.random() * Math.min(1_000, exponential * 0.25));
+
+        this.#reconnectTimer = setTimeout(async () => {
+            this.#reconnectTimer = undefined;
+            if (this.#closed) return;
+            try {
+                const url = this.#isResuming && this.resumeInfo.url.length > 0
+                    ? `${this.resumeInfo.url}/?v=10&encoding=json`
+                    : await this.#getGatewayUrl();
+                await this.#connect(url);
+            } catch {
+                this.#scheduleReconnect(this.#isResuming);
             }
-
-            this.#isResuming = false;
-            await this.connect();
-        });
-        this.#ws.addEventListener("message", (event) => {
-            this.#debug?.(DebugIdentifier.WSMessage, event.data);
-            const payload = <Payload>JSON.parse((event.data as Buffer).toString());
-            if (typeof payload.s === "number") this.#sequenceNumber = payload.s;
-
-            // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check
-            switch (payload.op) {
-                case GatewayOpCode.Dispatch: {
-                    this.#dispatch(payload);
-                    break;
-                }
-                case GatewayOpCode.Hello: {
-                    const interval = this.#getInterval(payload.d.heartbeat_interval);
-                    this.#startTimer(interval);
-
-                    if (!this.#isResuming) this.#identify();
-                    else this.#resume();
-
-                    break;
-                }
-                case GatewayOpCode.Heartbeat: {
-                    this.#debug?.(DebugIdentifier.HeartbeatRequest);
-                    this.#sendHeartbeatPayload();
-                    break;
-                }
-                case GatewayOpCode.Reconnect: {
-                    this.#debug?.(DebugIdentifier.Reconnect);
-                    this.#ws.close(1001);
-                    break;
-                }
-                case GatewayOpCode.InvalidSession: {
-                    this.#debug?.(DebugIdentifier.InvalidSession);
-                    if (payload.d) this.#ws.close(1001);
-                    else this.#ws.close(1000);
-                    break;
-                }
-                case GatewayOpCode.HeartbeatACK: {
-                    this.#gotACK = true;
-                    this.#debug?.(DebugIdentifier.ACK);
-                    break;
-                }
-                default:
-                    break;
-            }
-
-            return;
-        });
+        }, delay);
     }
 
     #getInterval(interval: number): number {
-        let res = 0;
-        let i = 0;
-
-        do {
-            // eslint-disable-next-line @stylistic/no-extra-parens
-            res = Math.round((interval * Math.random()) + i);
-            i++;
-        } while (res < interval / 2);
-
-        return res;
+        return Math.floor(Math.random() * interval);
     }
 
     #sendHeartbeatPayload(): void {
+        if (typeof this.#ws === "undefined" || this.#ws.readyState !== WebSocket.OPEN) return;
         this.#gotACK = false;
-        this.#ws.send(`{ "op": 1, "d": ${this.#sequenceNumber}, "s": null, "t": null }`);
+        this.#heartbeatPending = true;
+        this.#ws.send(JSON.stringify({
+            op: GatewayOpCode.Heartbeat,
+            d: this.#sequenceNumber,
+            s: null,
+            t: null
+        }));
     }
 
     #identify(): void {
@@ -175,73 +274,83 @@ export class WebSocketManager {
         };
 
         this.#debug?.(DebugIdentifier.Identify);
-        this.#ws.send(JSON.stringify(payload));
+        this.#ws?.send(JSON.stringify(payload));
     }
 
     #resume(): void {
+        if (!this.#canResume()) {
+            this.#isResuming = false;
+            this.#identify();
+            return;
+        }
+
         const payload: Resume = {
             op: GatewayOpCode.Resume,
             d: {
                 token: this.#options.token,
                 session_id: this.resumeInfo.id,
-                seq: this.#sequenceNumber ?? 0
+                seq: this.#sequenceNumber as number
             },
             s: null,
             t: null
         };
 
         this.#debug?.(DebugIdentifier.Resume);
-        this.#ws.send(JSON.stringify(payload));
+        this.#ws?.send(JSON.stringify(payload));
     }
 
     #startTimer(interval: number): void {
+        this.#clearTimer();
+        this.#heartbeatInterval = interval;
         this.#gotACK = true;
-        this.#timer = setInterval(async () => {
-            if (!this.#gotACK) {
+        this.#heartbeatPending = false;
+        this.#timer = setInterval(() => {
+            if (this.#heartbeatPending && !this.#gotACK) {
                 this.#debug?.(DebugIdentifier.MissingACK);
-                await setTimeout(500);
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-                if (!this.#gotACK) {
-                    this.#debug?.(DebugIdentifier.ZombieConnection);
-                    this.#ws.close(1001);
-                    return;
-                }
+                this.#debug?.(DebugIdentifier.ZombieConnection);
+                this.#ws?.close(1001);
+                return;
             }
 
             this.#debug?.(DebugIdentifier.Heartbeat);
             this.#sendHeartbeatPayload();
-        }, interval);
+        }, this.#getInterval(interval));
     }
 
     #clearTimer(): void {
         if (typeof this.#timer === "undefined") return;
         clearInterval(this.#timer);
+        this.#timer = undefined;
     }
 
-    async #attemptResume(): Promise<void> {
-        this.#debug?.(DebugIdentifier.AttemptingResume);
-        this.#isResuming = true;
-        await this.connect(`${this.resumeInfo.url}/?v=10&encoding=json`);
+    #clearReconnectTimer(): void {
+        if (typeof this.#reconnectTimer === "undefined") return;
+        clearTimeout(this.#reconnectTimer);
+        this.#reconnectTimer = undefined;
     }
 
-    /** Returns time taken in ms */
+    #clearResumeInfo(): void {
+        this.resumeInfo.url = "";
+        this.resumeInfo.id = "";
+    }
+
     public async ping(): Promise<number> {
-        return new Promise((res) => {
-            this.#ws.addEventListener(
-                "pong",
-                () => {
-                    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-                    res(performance.now() - start);
-                },
-                { once: true }
-            );
+        if (typeof this.#ws === "undefined" || typeof this.#ws.ping !== "function") throw new Error("WebSocket is not connected");
 
+        return new Promise((resolve, reject) => {
             const start = performance.now();
-            this.#ws.ping();
+            const timeout = setTimeout(() => reject(new Error("WebSocket ping timed out")), 5_000);
+            this.#ws?.addEventListener("pong", () => {
+                clearTimeout(timeout);
+                resolve(performance.now() - start);
+            }, { once: true });
+            this.#ws?.ping?.();
         });
     }
 
     public updatePresence(presence: UpdatePresenceStructure): void {
+        if (typeof this.#ws === "undefined" || this.#ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
+
         const options: UpdatePresence = {
             op: GatewayOpCode.PresenceUpdate,
             d: presence,
@@ -259,8 +368,4 @@ export class WebSocketManager {
     public get options(): ManagerOptions {
         return this.#options;
     }
-}
-
-function closeCodeAllowsReconnection(code: number): boolean {
-    return code >= 4000 && code !== 4004 && code < 4010;
 }
