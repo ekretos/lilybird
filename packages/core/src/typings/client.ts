@@ -2,245 +2,71 @@ import type { CachingManager } from "../cache/manager.js";
 import type { CacheManagerStructure } from "./cache-manager.js";
 import type { Awaitable } from "./utils.js";
 import type { Client } from "../client.js";
+import type { DispatchFunction } from "../ws/manager.js";
+import type { Application } from "./application.js";
 
+import type { CachingDelegationType, TransformerReturnType, CacheExecutionPolicy, DebugIdentifier } from "#enums";
 import type {
-    CachingDelegationType,
-    TransformerReturnType,
-    CacheExecutionPolicy,
-    DebugIdentifier,
-    Intents
-} from "#enums";
-
-import type {
-    ApplicationCommandPermissionsUpdate,
-    AutoModerationActionExecution,
-    GuildScheduledEventUserRemove,
-    GuildScheduledEventUserAdd,
-    MessageReactionRemoveEmoji,
-    GuildScheduledEventCreate,
-    GuildScheduledEventDelete,
-    GuildScheduledEventUpdate,
-    AutoModerationRuleCreate,
-    AutoModerationRuleDelete,
-    AutoModerationRuleUpdate,
-    GuildAuditLogEntryCreate,
-    MessageReactionRemoveAll,
-    UpdatePresenceStructure,
-    GuildIntegrationsUpdate,
-    MessageReactionRemove,
-    MessagePollVoteRemove,
-    ReceiveDispatchEvent,
-    GuildStickersUpdate,
-    StageInstanceCreate,
-    StageInstanceUpdate,
-    ThreadMembersUpdate,
-    MessageReactionAdd,
-    MessagePollVoteAdd,
-    ThreadMemberUpdate,
-    MessageDeleteBulk,
-    IntegrationCreate,
-    IntegrationDelete,
-    IntegrationUpdate,
-    InteractionCreate,
-    VoiceServerUpdate,
-    ChannelPinsUpdate,
-    GuildMemberRemove,
-    GuildEmojisUpdate,
-    GuildMemberUpdate,
-    GuildMembersChunk,
-    VoiceStateUpdate,
-    GuildRoleCreate,
-    GuildRoleUpdate,
-    PresenceUpdate,
-    ThreadListSync,
-    GuildRoleDelete,
-    GuildMemberAdd,
-    GuildBanRemove,
-    MessageCreate,
-    MessageDelete,
-    ChannelCreate,
-    ChannelDelete,
-    ChannelUpdate,
-    MessageUpdate,
-    WebhookUpdate,
-    InviteCreate,
-    InviteDelete,
-    ThreadCreate,
-    ThreadDelete,
-    ThreadUpdate,
-    GuildBanAdd,
-    GuildCreate,
-    GuildDelete,
-    GuildUpdate,
-    TypingStart,
-    UserUpdate,
-    Ready
+    ApplicationCommandPermissionsUpdate, AutoModerationActionExecution, GuildScheduledEventUserRemove, GuildScheduledEventUserAdd,
+    MessageReactionRemoveEmoji, GuildScheduledEventCreate, GuildScheduledEventDelete, GuildScheduledEventUpdate, AutoModerationRuleCreate,
+    AutoModerationRuleDelete, AutoModerationRuleUpdate, GuildAuditLogEntryCreate, MessageReactionRemoveAll, UpdatePresenceStructure,
+    GuildIntegrationsUpdate, MessageReactionRemove, MessagePollVoteRemove, ReceiveDispatchEvent, GuildStickersUpdate, StageInstanceCreate,
+    StageInstanceUpdate, ThreadMembersUpdate, MessageReactionAdd, MessagePollVoteAdd, ThreadMemberUpdate, MessageDeleteBulk, IntegrationCreate,
+    IntegrationDelete, IntegrationUpdate, InteractionCreate, VoiceServerUpdate, ChannelPinsUpdate, GuildMemberRemove, GuildEmojisUpdate,
+    GuildMemberUpdate, GuildMembersChunk, VoiceStateUpdate, GuildRoleCreate, GuildRoleUpdate, PresenceUpdate, ThreadListSync, GuildRoleDelete,
+    GuildMemberAdd, GuildBanRemove, MessageCreate, MessageDelete, ChannelCreate, ChannelDelete, ChannelUpdate, MessageUpdate, WebhookUpdate,
+    InviteCreate, InviteDelete, ThreadCreate, ThreadDelete, ThreadUpdate, GuildBanAdd, GuildCreate, GuildDelete, GuildUpdate, TypingStart,
+    UserUpdate, Ready
 } from "./gateway-events.js";
 
-export type ClientListeners<T extends Transformers> = {
+export type Listeners<C, T extends Transformers<C>> = {
     [K in keyof T]?: T[K] extends { handler: unknown }
         ? (T[K] & {})["handler"] extends ((...args: any) => infer R)
             ? R extends [unknown, ...Array<unknown>] ? ((...arg: R) => Awaitable<unknown>) : ((arg: R) => Awaitable<unknown>)
             : never
         : (T[K] & { handler: unknown })["handler"] extends ((...args: infer U) => unknown)
-            ? ((...args: U) => Awaitable<unknown>)
-            : never
+            ? ((...args: U) => Awaitable<unknown>) : never
 };
 
-export type Transformer<T> = {
-    return: TransformerReturnType,
-    handler: (...args: [client: Client, payload: T]) => unknown
-};
+export type Transformer<C, T> = { return: TransformerReturnType, handler: (...args: [client: C, payload: T]) => unknown };
 
-export interface Transformers {
-    raw?: {
-        return: TransformerReturnType,
-        handler: (data: ReceiveDispatchEvent) => unknown
-    };
-    ready?: Transformer<Ready["d"]>;
-    resumed?: Transformer<undefined>;
-    applicationCommandPermissionsUpdate?: Transformer<ApplicationCommandPermissionsUpdate["d"]>;
-    autoModerationRuleCreate?: Transformer<AutoModerationRuleCreate["d"]>;
-    autoModerationRuleUpdate?: Transformer<AutoModerationRuleUpdate["d"]>;
-    autoModerationRuleDelete?: Transformer<AutoModerationRuleDelete["d"]>;
-    autoModerationActionExecution?: Transformer<AutoModerationActionExecution["d"]>;
-    channelCreate?: Transformer<ChannelCreate["d"]>;
-    channelUpdate?: Transformer<ChannelUpdate["d"]>;
-    channelDelete?: Transformer<ChannelDelete["d"]>;
-    channelPinsUpdate?: Transformer<ChannelPinsUpdate["d"]>;
-    threadCreate?: Transformer<ThreadCreate["d"]>;
-    threadUpdate?: Transformer<ThreadUpdate["d"]>;
-    threadDelete?: Transformer<ThreadDelete["d"]>;
-    threadListSync?: Transformer<ThreadListSync["d"]>;
-    threadMemberUpdate?: Transformer<ThreadMemberUpdate["d"]>;
-    threadMembersUpdate?: Transformer<ThreadMembersUpdate["d"]>;
-    guildCreate?: Transformer<GuildCreate["d"]>;
-    guildUpdate?: Transformer<GuildUpdate["d"]>;
-    guildDelete?: Transformer<GuildDelete["d"]>;
-    guildAuditLogEntryCreate?: Transformer<GuildAuditLogEntryCreate["d"]>;
-    guildBanAdd?: Transformer<GuildBanAdd["d"]>;
-    guildBanRemove?: Transformer<GuildBanRemove["d"]>;
-    guildEmojisUpdate?: Transformer<GuildEmojisUpdate["d"]>;
-    guildStickersUpdate?: Transformer<GuildStickersUpdate["d"]>;
-    guildIntegrationsUpdate?: Transformer<GuildIntegrationsUpdate["d"]>;
-    guildMemberAdd?: Transformer<GuildMemberAdd["d"]>;
-    guildMemberRemove?: Transformer<GuildMemberRemove["d"]>;
-    guildMemberUpdate?: Transformer<GuildMemberUpdate["d"]>;
-    guildMembersChunk?: Transformer<GuildMembersChunk["d"]>;
-    guildRoleCreate?: Transformer<GuildRoleCreate["d"]>;
-    guildRoleUpdate?: Transformer<GuildRoleUpdate["d"]>;
-    guildRoleDelete?: Transformer<GuildRoleDelete["d"]>;
-    guildScheduledEventCreate?: Transformer<GuildScheduledEventCreate["d"]>;
-    guildScheduledEventUpdate?: Transformer<GuildScheduledEventUpdate["d"]>;
-    guildScheduledEventDelete?: Transformer<GuildScheduledEventDelete["d"]>;
-    guildScheduledEventUserAdd?: Transformer<GuildScheduledEventUserAdd["d"]>;
-    guildScheduledEventUserRemove?: Transformer<GuildScheduledEventUserRemove["d"]>;
-    integrationCreate?: Transformer<IntegrationCreate["d"]>;
-    integrationUpdate?: Transformer<IntegrationUpdate["d"]>;
-    integrationDelete?: Transformer<IntegrationDelete["d"]>;
-    interactionCreate?: Transformer<InteractionCreate["d"]>;
-    inviteCreate?: Transformer<InviteCreate["d"]>;
-    inviteDelete?: Transformer<InviteDelete["d"]>;
-    messageCreate?: Transformer<MessageCreate["d"]>;
-    messageUpdate?: Transformer<MessageUpdate["d"]>;
-    messageDelete?: Transformer<MessageDelete["d"]>;
-    messageDeleteBulk?: Transformer<MessageDeleteBulk["d"]>;
-    messageReactionAdd?: Transformer<MessageReactionAdd["d"]>;
-    messageReactionRemove?: Transformer<MessageReactionRemove["d"]>;
-    messageReactionRemoveAll?: Transformer<MessageReactionRemoveAll["d"]>;
-    messageReactionRemoveEmoji?: Transformer<MessageReactionRemoveEmoji["d"]>;
-    presenceUpdate?: Transformer<PresenceUpdate["d"]>;
-    stageInstanceCreate?: Transformer<StageInstanceCreate["d"]>;
-    stageInstanceUpdate?: Transformer<StageInstanceUpdate["d"]>;
-    stageInstanceDelete?: Transformer<StageInstanceCreate["d"]>;
-    typingStart?: Transformer<TypingStart["d"]>;
-    userUpdate?: Transformer<UserUpdate["d"]>;
-    voiceStateUpdate?: Transformer<VoiceStateUpdate["d"]>;
-    voiceServerUpdate?: Transformer<VoiceServerUpdate["d"]>;
-    webhookUpdate?: Transformer<WebhookUpdate["d"]>;
-    messagePollVoteAdd?: Transformer<MessagePollVoteAdd["d"]>;
-    messagePollVoteRemove?: Transformer<MessagePollVoteRemove["d"]>;
+export interface Transformers<C> {
+    setup?: Transformer<C, Ready["d"]>; ready?: Transformer<C, Ready["d"]>; resumed?: Transformer<C, undefined>;
+    applicationCommandPermissionsUpdate?: Transformer<C, ApplicationCommandPermissionsUpdate["d"]>;
+    autoModerationRuleCreate?: Transformer<C, AutoModerationRuleCreate["d"]>; autoModerationRuleUpdate?: Transformer<C, AutoModerationRuleUpdate["d"]>;
+    autoModerationRuleDelete?: Transformer<C, AutoModerationRuleDelete["d"]>; autoModerationActionExecution?: Transformer<C, AutoModerationActionExecution["d"]>;
+    channelCreate?: Transformer<C, ChannelCreate["d"]>; channelUpdate?: Transformer<C, ChannelUpdate["d"]>; channelDelete?: Transformer<C, ChannelDelete["d"]>;
+    channelPinsUpdate?: Transformer<C, ChannelPinsUpdate["d"]>; threadCreate?: Transformer<C, ThreadCreate["d"]>; threadUpdate?: Transformer<C, ThreadUpdate["d"]>;
+    threadDelete?: Transformer<C, ThreadDelete["d"]>; threadListSync?: Transformer<C, ThreadListSync["d"]>; threadMemberUpdate?: Transformer<C, ThreadMemberUpdate["d"]>;
+    threadMembersUpdate?: Transformer<C, ThreadMembersUpdate["d"]>; guildCreate?: Transformer<C, GuildCreate["d"]>; guildUpdate?: Transformer<C, GuildUpdate["d"]>;
+    guildDelete?: Transformer<C, GuildDelete["d"]>; guildAuditLogEntryCreate?: Transformer<C, GuildAuditLogEntryCreate["d"]>; guildBanAdd?: Transformer<C, GuildBanAdd["d"]>;
+    guildBanRemove?: Transformer<C, GuildBanRemove["d"]>; guildEmojisUpdate?: Transformer<C, GuildEmojisUpdate["d"]>; guildStickersUpdate?: Transformer<C, GuildStickersUpdate["d"]>;
+    guildIntegrationsUpdate?: Transformer<C, GuildIntegrationsUpdate["d"]>; guildMemberAdd?: Transformer<C, GuildMemberAdd["d"]>; guildMemberRemove?: Transformer<C, GuildMemberRemove["d"]>;
+    guildMemberUpdate?: Transformer<C, GuildMemberUpdate["d"]>; guildMembersChunk?: Transformer<C, GuildMembersChunk["d"]>; guildRoleCreate?: Transformer<C, GuildRoleCreate["d"]>;
+    guildRoleUpdate?: Transformer<C, GuildRoleUpdate["d"]>; guildRoleDelete?: Transformer<C, GuildRoleDelete["d"]>; guildScheduledEventCreate?: Transformer<C, GuildScheduledEventCreate["d"]>;
+    guildScheduledEventUpdate?: Transformer<C, GuildScheduledEventUpdate["d"]>; guildScheduledEventDelete?: Transformer<C, GuildScheduledEventDelete["d"]>;
+    guildScheduledEventUserAdd?: Transformer<C, GuildScheduledEventUserAdd["d"]>; guildScheduledEventUserRemove?: Transformer<C, GuildScheduledEventUserRemove["d"]>;
+    integrationCreate?: Transformer<C, IntegrationCreate["d"]>; integrationUpdate?: Transformer<C, IntegrationUpdate["d"]>; integrationDelete?: Transformer<C, IntegrationDelete["d"]>;
+    interactionCreate?: Transformer<C, InteractionCreate["d"]>; inviteCreate?: Transformer<C, InviteCreate["d"]>; inviteDelete?: Transformer<C, InviteDelete["d"]>;
+    messageCreate?: Transformer<C, MessageCreate["d"]>; messageUpdate?: Transformer<C, MessageUpdate["d"]>; messageDelete?: Transformer<C, MessageDelete["d"]>;
+    messageDeleteBulk?: Transformer<C, MessageDeleteBulk["d"]>; messageReactionAdd?: Transformer<C, MessageReactionAdd["d"]>; messageReactionRemove?: Transformer<C, MessageReactionRemove["d"]>;
+    messageReactionRemoveAll?: Transformer<C, MessageReactionRemoveAll["d"]>; messageReactionRemoveEmoji?: Transformer<C, MessageReactionRemoveEmoji["d"]>;
+    presenceUpdate?: Transformer<C, PresenceUpdate["d"]>; stageInstanceCreate?: Transformer<C, StageInstanceCreate["d"]>; stageInstanceUpdate?: Transformer<C, StageInstanceUpdate["d"]>;
+    stageInstanceDelete?: Transformer<C, StageInstanceCreate["d"]>; typingStart?: Transformer<C, TypingStart["d"]>; userUpdate?: Transformer<C, UserUpdate["d"]>;
+    voiceStateUpdate?: Transformer<C, VoiceStateUpdate["d"]>; voiceServerUpdate?: Transformer<C, VoiceServerUpdate["d"]>; webhookUpdate?: Transformer<C, WebhookUpdate["d"]>;
+    messagePollVoteAdd?: Transformer<C, MessagePollVoteAdd["d"]>; messagePollVoteRemove?: Transformer<C, MessagePollVoteRemove["d"]>;
 }
 
-export interface SelectiveCache {
-    create?: CacheExecutionPolicy;
-    update?: CacheExecutionPolicy;
-    delete?: CacheExecutionPolicy;
-}
-
-interface CacheWithoutTransformers {
-    applyTransformers?: false;
-}
-
-interface CacheWithTransformers {
-    applyTransformers: true;
-    transformerTypes: {
-        guild: unknown,
-        channel: unknown,
-        voiceState: unknown
-    };
-}
-
+export interface SelectiveCache { create?: CacheExecutionPolicy; update?: CacheExecutionPolicy; delete?: CacheExecutionPolicy; }
+interface CacheWithoutTransformers { applyTransformers?: false; }
+interface CacheWithTransformers { applyTransformers: true; transformerTypes: { guild: unknown, channel: unknown, voiceState: unknown }; }
 type ApplyTransformers = CacheWithTransformers | CacheWithoutTransformers;
-
-export interface BaseCachingStructure {
-    delegate: CachingDelegationType;
-    manager?: CacheManagerStructure;
-    enabled: {
-        self?: CacheExecutionPolicy,
-        guild?: boolean | SelectiveCache,
-        channel?: boolean | (SelectiveCache & {
-            threads?: boolean | SelectiveCache
-        }),
-        voiceState?: CacheExecutionPolicy
-    };
-    customKeys?: {
-        guild_voice_states?: string,
-        voice_state_user_id?: string,
-        voice_state_channel_id?: string
-    };
-}
-
-export interface ExternalCache extends BaseCachingStructure {
-    delegate: CachingDelegationType.EXTERNAL;
-    manager: CacheManagerStructure;
-    safeToTransform?: boolean;
-}
-
-export interface TransformersCache extends BaseCachingStructure {
-    delegate: CachingDelegationType.TRANSFORMERS;
-}
-
-export interface DefaultCache extends BaseCachingStructure {
-    delegate: CachingDelegationType.DEFAULT;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export type ParseCachingManager<T extends ClientOptions<Transformers>> = T["caching"] extends {}
-    ? T["caching"]["applyTransformers"] extends true
-        ? T["caching"] extends { transformerTypes: (infer U extends CacheWithTransformers["transformerTypes"]) }
-            ? CachingManager<U["guild"], U["channel"], U["voiceState"]> : never
-        : T["caching"]["delegate"] extends CachingDelegationType.EXTERNAL
-            ? T["caching"]["manager"] & {}
-            : CachingManager
-    : never;
-
+export interface BaseCachingStructure { delegate: CachingDelegationType; manager?: CacheManagerStructure; enabled: { self?: CacheExecutionPolicy, guild?: boolean | SelectiveCache, channel?: boolean | (SelectiveCache & { threads?: boolean | SelectiveCache }), voiceState?: CacheExecutionPolicy }; customKeys?: { guild_voice_states?: string, voice_state_user_id?: string, voice_state_channel_id?: string }; }
+export interface ExternalCache extends BaseCachingStructure { delegate: CachingDelegationType.EXTERNAL; manager: CacheManagerStructure; safeToTransform?: boolean; }
+export interface TransformersCache extends BaseCachingStructure { delegate: CachingDelegationType.TRANSFORMERS; }
+export interface DefaultCache extends BaseCachingStructure { delegate: CachingDelegationType.DEFAULT; }
+export type CachingOptions = (DefaultCache | ExternalCache | TransformersCache) & ApplyTransformers;
+export type ParseCachingManager<T extends CachingOptions> = T extends {} ? T["applyTransformers"] extends true ? T extends { transformerTypes: (infer U extends CacheWithTransformers["transformerTypes"]) } ? CachingManager<U["guild"], U["channel"], U["voiceState"]> : never : T["delegate"] extends CachingDelegationType.EXTERNAL ? T["manager"] & {} : CachingManager : never;
 export type DebugFunction = (identifier: DebugIdentifier, payload?: unknown) => any;
-
-export interface BaseClientOptions<T extends Transformers> {
-    intents: number;
-    listeners: ClientListeners<T>;
-    transformers?: T;
-    presence?: UpdatePresenceStructure;
-    caching?: (DefaultCache | ExternalCache | TransformersCache) & ApplyTransformers;
-    useDebugRest?: boolean;
-    setup?: (client: Client) => Awaitable<any>;
-}
-
-export interface ClientOptions<T extends Transformers> extends Omit<BaseClientOptions<T>, "intents"> {
-    intents: Array<Intents> | number;
-    token: string;
-    attachDebugListener?: boolean;
-    customCacheKeys?: BaseCachingStructure["customKeys"];
-    debugListener?: (identifier: DebugIdentifier, payload: unknown) => void;
-}
+export interface ClientOptions { intents: number; dispatch?: DispatchFunction; presence?: UpdatePresenceStructure; useDebugRest?: boolean; cachingManager?: CacheManagerStructure; }
+export interface MockClient { readonly user: any; readonly sessionId: string; readonly application: Application.Structure; readonly cache: CacheManagerStructure; }
