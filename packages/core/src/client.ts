@@ -43,7 +43,8 @@ export class Client implements MockClient {
 
     public async login(token: string, dispatch: DispatchFunction | undefined = this.#dispatch): Promise<string> {
         if (typeof dispatch === "undefined") throw new Error("the client doesn't have any 'dispatch' function defined.");
-        (this as { "#dispatch"?: DispatchFunction });
+        this.#dispatch = dispatch;
+        this.ws.options = { token };
         this.rest.setToken(token);
         await this.ws.connect();
         return token;
@@ -69,7 +70,6 @@ export interface CreateClientOptions<T extends Transformers<any>> extends Omit<C
 }
 
 export async function createClient<T extends Transformers<Client> = Transformers<Client>>(options: CreateClientOptions<T>): Promise<Client> {
-    let dispatch: DispatchFunction | undefined;
     const compiler = new ListenerCompiler<Client, T>({ transformers: options.transformers, transformClient: options.transformClient });
     compiler.addListenersFromObject(options.listeners);
     if (typeof options.caching !== "undefined") compiler.appendCachingHandlers(options.caching);
@@ -78,11 +78,9 @@ export async function createClient<T extends Transformers<Client> = Transformers
         intents: options.intents,
         presence: options.presence,
         useDebugRest: typeof options.debug !== "undefined",
-        cachingManager: options.cachingManager,
-        dispatch: (payload) => dispatch?.(payload)
+        cachingManager: options.cachingManager
     }, options.debug);
 
-    dispatch = compiler.getDispatchFunction(client, client.ws.resumeInfo);
-    await client.login(options.token, dispatch);
+    await client.login(options.token, compiler.getDispatchFunction(client, client.ws.resumeInfo));
     return client;
 }
