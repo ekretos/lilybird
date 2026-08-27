@@ -20,12 +20,13 @@ import type {
 } from "./gateway-events.js";
 
 export type Listeners<C, T extends Transformers<C>> = {
-    [K in keyof T]?: T[K] extends { handler: unknown }
-        ? (T[K] & {})["handler"] extends ((...args: any) => infer R)
-            ? R extends [unknown, ...Array<unknown>] ? ((...arg: R) => Awaitable<unknown>) : ((arg: R) => Awaitable<unknown>)
-            : never
-        : (T[K] & { handler: unknown })["handler"] extends ((...args: infer U) => unknown)
-            ? ((...args: U) => Awaitable<unknown>) : never
+    [K in keyof T]?: T[K] extends { handler: (...args: Array<any>) => infer R }
+        ? unknown extends R
+            ? ((client: C, payload: any) => Awaitable<unknown>)
+            : R extends [unknown, ...Array<unknown>]
+                ? ((...arg: R) => Awaitable<unknown>)
+                : ((arg: R) => Awaitable<unknown>)
+        : ((client: C, payload: any) => Awaitable<unknown>)
 };
 
 export type Transformer<C = any, T = any> = { return: TransformerReturnType, handler: (...args: [client: C, payload: T]) => unknown };
@@ -97,18 +98,74 @@ export interface Transformers<C = any> {
     messagePollVoteRemove?: Transformer<C, MessagePollVoteRemove["d"]>;
 }
 
-export interface SelectiveCache { create?: CacheExecutionPolicy; update?: CacheExecutionPolicy; delete?: CacheExecutionPolicy }
-interface CacheWithoutTransformers { applyTransformers?: false }
-interface CacheWithTransformers { applyTransformers: true; transformerTypes: { guild: unknown, channel: unknown, voiceState: unknown } }
+export interface SelectiveCache {
+    create?: CacheExecutionPolicy;
+    update?: CacheExecutionPolicy;
+    delete?: CacheExecutionPolicy;
+}
+
+interface CacheWithoutTransformers {
+    applyTransformers?: false;
+}
+
+interface CacheWithTransformers {
+    applyTransformers: true;
+    transformerTypes: {
+        guild: unknown,
+        channel: unknown,
+        voiceState: unknown
+    };
+}
+
 type ApplyTransformers = CacheWithTransformers | CacheWithoutTransformers;
-export interface BaseCachingStructure { delegate: CachingDelegationType; manager?: CacheManagerStructure; enabled: { self?: CacheExecutionPolicy, guild?: boolean | SelectiveCache, channel?: boolean | (SelectiveCache & { threads?: boolean | SelectiveCache }), voiceState?: CacheExecutionPolicy }; customKeys?: { guild_voice_states?: string, voice_state_user_id?: string, voice_state_channel_id?: string } }
-export interface ExternalCache extends BaseCachingStructure { delegate: CachingDelegationType.EXTERNAL; manager: CacheManagerStructure; safeToTransform?: boolean }
-export interface TransformersCache extends BaseCachingStructure { delegate: CachingDelegationType.TRANSFORMERS }
-export interface DefaultCache extends BaseCachingStructure { delegate: CachingDelegationType.DEFAULT }
+
+export interface BaseCachingStructure {
+    delegate: CachingDelegationType;
+    manager?: CacheManagerStructure;
+    enabled: {
+        self?: CacheExecutionPolicy,
+        guild?: boolean | SelectiveCache,
+        channel?: boolean | (SelectiveCache & {
+            threads?: boolean | SelectiveCache
+        }),
+        voiceState?: CacheExecutionPolicy
+    };
+    customKeys?: {
+        guild_voice_states?: string,
+        voice_state_user_id?: string,
+        voice_state_channel_id?: string
+    };
+}
+
+export interface ExternalCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.EXTERNAL;
+    manager: CacheManagerStructure;
+    safeToTransform?: boolean;
+}
+
+export interface TransformersCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.TRANSFORMERS;
+}
+
+export interface DefaultCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.DEFAULT;
+}
+
 export type CachingOptions = (DefaultCache | ExternalCache | TransformersCache) & ApplyTransformers;
-export type ParseCachingManager<T extends CachingOptions> = T extends {} ? T["applyTransformers"] extends true ? T extends { transformerTypes: (infer U extends CacheWithTransformers["transformerTypes"]) } ? CachingManager<U["guild"], U["channel"], U["voiceState"]> : never : T["delegate"] extends CachingDelegationType.EXTERNAL ? T["manager"] & {} : CachingManager : never;
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type ParseCachingManager<T extends CachingOptions> = T extends {}
+    ? T["applyTransformers"] extends true
+        ? T extends { transformerTypes: (infer U extends CacheWithTransformers["transformerTypes"]) }
+            ? CachingManager<U["guild"], U["channel"], U["voiceState"]> : never
+        : T["delegate"] extends CachingDelegationType.EXTERNAL
+            ? T["manager"] & {}
+            : CachingManager
+    : never;
+
 export type DebugFunction = (identifier: DebugIdentifier, payload?: unknown) => any;
 export type ClientListeners<T extends Transformers = Transformers> = Listeners<Client<T>, T>;
+
 export interface BaseClientOptions<T extends Transformers = Transformers> {
     intents: Array<Intents> | number;
     listeners?: Listeners<Client<T>, T>;
@@ -118,6 +175,7 @@ export interface BaseClientOptions<T extends Transformers = Transformers> {
     useDebugRest?: boolean;
     setup?: (client: Client<T>) => Awaitable<any>;
 }
+
 export interface ClientOptions<T extends Transformers = Transformers> extends BaseClientOptions<T> {
     token?: string;
     dispatch?: DispatchFunction;
@@ -126,5 +184,11 @@ export interface ClientOptions<T extends Transformers = Transformers> extends Ba
     attachDebugListener?: boolean;
     debugListener?: (identifier: DebugIdentifier, payload: unknown) => void;
 }
-export interface MockClient { readonly user: any; readonly sessionId: string; readonly application: Application.Structure; readonly cache: CacheManagerStructure }
+
+export interface MockClient {
+    readonly user: unknown;
+    readonly sessionId: string;
+    readonly application: Application.Structure;
+    readonly cache: CacheManagerStructure;
+}
 

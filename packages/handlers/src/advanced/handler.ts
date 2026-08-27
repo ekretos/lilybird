@@ -8,7 +8,6 @@ import type { BaseCommandOption, CommandOption, CommandStructure, SubCommandStru
 import type { ComponentStructure, DynamicComponentStructure } from "./message-component-store.js";
 import type { HandlerListener } from "./shared.js";
 import type {
-    CacheManagerStructure,
     ApplicationCommand,
     ClientListeners,
     Transformers,

@@ -13,12 +13,19 @@ import type {
     Transformers,
     Application,
     MockClient,
-    Listeners
+    Listeners,
+    User
 } from "./typings/index.js";
 
 type GetUserType<T extends Transformers> = (T["userUpdate"] & {}) extends { handler: ((...args: infer U) => infer R) }
-    ? unknown extends R ? U[1] : R
-    : never;
+    ? unknown extends R
+        ? [U[1]] extends [any]
+            ? any extends U[1]
+                ? User.Structure
+                : U[1]
+            : User.Structure
+        : R
+    : User.Structure;
 
 export class Client<T extends Transformers = Transformers, C extends CacheManagerStructure = CacheManagerStructure> implements MockClient {
     public readonly rest: REST;
@@ -42,7 +49,7 @@ export class Client<T extends Transformers = Transformers, C extends CacheManage
                 presence: options.presence
             },
             (payload) => {
-                void this.#dispatch?.(payload);
+                this.#dispatch?.(payload);
             },
             debug
         );
@@ -72,4 +79,27 @@ export class Client<T extends Transformers = Transformers, C extends CacheManage
             rest: final
         };
     }
+}
+
+export interface CreateClientOptions<T extends Transformers = Transformers> extends Omit<ClientOptions<T>, "dispatch">, CompilerOptions<T> {
+    token: string;
+    listeners: Listeners<Client<T>, T>;
+    caching?: CachingOptions;
+    debug?: DebugFunction;
+}
+
+export async function createClient<T extends Transformers = Transformers>(options: CreateClientOptions<T>): Promise<Client<T>> {
+    const compiler = new ListenerCompiler<Client<T>, T>({ transformers: options.transformers, transformClient: options.transformClient });
+    compiler.addListenersFromObject(options.listeners);
+    if (typeof options.caching !== "undefined") compiler.appendCachingHandlers(options.caching);
+
+    const client = new Client<T>({
+        intents: options.intents,
+        presence: options.presence,
+        useDebugRest: typeof options.debug !== "undefined",
+        cachingManager: options.cachingManager
+    }, options.debug);
+
+    await client.login(options.token, compiler.getDispatchFunction(client, client.ws.resumeInfo));
+    return client;
 }

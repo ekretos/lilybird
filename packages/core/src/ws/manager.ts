@@ -23,13 +23,13 @@ export class WebSocketManager {
     #isResuming = false;
     #ws?: Socket;
     #gatewayInfo?: GetGatewayBotResponse;
-    #options: Required<ManagerOptions>;
+    #options: ManagerOptions & Required<Pick<ManagerOptions, "reconnect" | "maxReconnectAttempts" | "reconnectBaseDelay" | "reconnectMaxDelay">>;
     #timer?: ReturnType<typeof setInterval>;
     #reconnectTimer?: ReturnType<typeof setTimeout>;
     #reconnectAttempts = 0;
     #generation = 0;
     #closed = false;
-    #gotACK = true;
+    #gotAck = true;
     #heartbeatPending = false;
 
     public readonly resumeInfo: { url: string, id: string } = <never>{};
@@ -43,7 +43,6 @@ export class WebSocketManager {
             maxReconnectAttempts: Infinity,
             reconnectBaseDelay: 1_000,
             reconnectMaxDelay: 30_000,
-            shard: options.shard,
             ...options
         };
     }
@@ -61,10 +60,10 @@ export class WebSocketManager {
     public async connect(url?: string): Promise<void> {
         this.#closed = false;
         this.#clearReconnectTimer();
-        await this.#connect(url ?? await this.#getGatewayUrl());
+        this.#connect(url ?? await this.#getGatewayUrl());
     }
 
-    async #connect(url: string): Promise<void> {
+    #connect(url: string): void {
         const generation = ++this.#generation;
         this.#clearTimer();
         this.#heartbeatPending = false;
@@ -101,9 +100,15 @@ export class WebSocketManager {
             if (generation !== this.#generation) return;
             this.#debug?.(DebugIdentifier.WSMessage, event.data);
             let payload: Payload;
-            try { payload = <Payload>JSON.parse(String(event.data)); } catch { ws.close(1002); return; }
+            try {
+                payload = <Payload>JSON.parse(String(event.data));
+            } catch {
+                ws.close(1002);
+                return;
+            }
             if (typeof payload.s === "number") this.#sequenceNumber = payload.s;
 
+            // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check
             switch (payload.op) {
                 case GatewayOpCode.Dispatch:
                     this.#dispatch(payload);
@@ -111,7 +116,10 @@ export class WebSocketManager {
                 case GatewayOpCode.Hello: {
                     this.#startTimer(payload.d.heartbeat_interval);
                     if (this.#isResuming && this.#canResume()) this.#resume();
-                    else { this.#isResuming = false; this.#identify(); }
+                    else {
+                        this.#isResuming = false;
+                        this.#identify();
+                    }
                     break;
                 }
                 case GatewayOpCode.Heartbeat:
@@ -122,10 +130,18 @@ export class WebSocketManager {
                     break;
                 case GatewayOpCode.InvalidSession:
                     this.#debug?.(DebugIdentifier.InvalidSession);
-                    if (payload.d && this.#canResume()) { this.#isResuming = true; ws.close(1001); } else { this.#isResuming = false; this.#sequenceNumber = null; this.#clearResumeInfo(); ws.close(1000); }
+                    if (payload.d && this.#canResume()) {
+                        this.#isResuming = true;
+                        ws.close(1001);
+                    } else {
+                        this.#isResuming = false;
+                        this.#sequenceNumber = null;
+                        this.#clearResumeInfo();
+                        ws.close(1000);
+                    }
                     break;
                 case GatewayOpCode.HeartbeatACK:
-                    this.#gotACK = true;
+                    this.#gotAck = true;
                     this.#heartbeatPending = false;
                     this.#debug?.(DebugIdentifier.ACK);
                     break;
@@ -156,21 +172,21 @@ export class WebSocketManager {
         if (!this.#options.reconnect || this.#closed || this.#reconnectTimer !== undefined || this.#reconnectAttempts >= this.#options.maxReconnectAttempts) return;
         this.#isResuming = resume && this.#canResume();
         const attempt = this.#reconnectAttempts++;
-        const exponential = Math.min(this.#options.reconnectBaseDelay * 2 ** attempt, this.#options.reconnectMaxDelay);
+        const exponential = Math.min(this.#options.reconnectBaseDelay * Math.pow(2, attempt), this.#options.reconnectMaxDelay);
         const delay = exponential + Math.floor(Math.random() * Math.min(1_000, exponential * 0.25));
         this.#reconnectTimer = setTimeout(async () => {
             this.#reconnectTimer = undefined;
             if (this.#closed) return;
             try {
                 const url = this.#isResuming && this.resumeInfo.url.length > 0 ? `${this.resumeInfo.url}/?v=10&encoding=json` : await this.#getGatewayUrl();
-                await this.#connect(url);
+                this.#connect(url);
             } catch { this.#scheduleReconnect(this.#isResuming); }
         }, delay);
     }
 
     #sendHeartbeatPayload(): void {
         if (typeof this.#ws === "undefined" || this.#ws.readyState !== WebSocket.OPEN) return;
-        this.#gotACK = false;
+        this.#gotAck = false;
         this.#heartbeatPending = true;
         this.#ws.send(JSON.stringify({ op: GatewayOpCode.Heartbeat, d: this.#sequenceNumber, s: null, t: null }));
     }
@@ -194,20 +210,24 @@ export class WebSocketManager {
     }
 
     #resume(): void {
-        if (!this.#canResume()) { this.#isResuming = false; this.#identify(); return; }
+        if (!this.#canResume() || this.#sequenceNumber === null) {
+            this.#isResuming = false;
+            this.#identify();
+            return;
+        }
         const { token } = this.#options;
         if (typeof token === "undefined") throw new Error("No token was found");
-        const payload: Resume = { op: GatewayOpCode.Resume, d: { token, session_id: this.resumeInfo.id, seq: this.#sequenceNumber! }, s: null, t: null };
+        const payload: Resume = { op: GatewayOpCode.Resume, d: { token, session_id: this.resumeInfo.id, seq: this.#sequenceNumber }, s: null, t: null };
         this.#debug?.(DebugIdentifier.Resume);
         this.#ws?.send(JSON.stringify(payload));
     }
 
     #startTimer(interval: number): void {
         this.#clearTimer();
-        this.#gotACK = true;
+        this.#gotAck = true;
         this.#heartbeatPending = false;
         this.#timer = setInterval(() => {
-            if (this.#heartbeatPending && !this.#gotACK) {
+            if (this.#heartbeatPending && !this.#gotAck) {
                 this.#debug?.(DebugIdentifier.MissingACK);
                 this.#debug?.(DebugIdentifier.ZombieConnection);
                 this.#ws?.close(1001);
@@ -218,16 +238,34 @@ export class WebSocketManager {
         }, Math.max(1, Math.floor(Math.random() * interval)));
     }
 
-    #clearTimer(): void { if (this.#timer !== undefined) { clearInterval(this.#timer); this.#timer = undefined; } }
-    #clearReconnectTimer(): void { if (this.#reconnectTimer !== undefined) { clearTimeout(this.#reconnectTimer); this.#reconnectTimer = undefined; } }
-    #clearResumeInfo(): void { this.resumeInfo.url = ""; this.resumeInfo.id = ""; }
+    #clearTimer(): void {
+        if (this.#timer !== undefined) {
+            clearInterval(this.#timer);
+            this.#timer = undefined;
+        }
+    }
+
+    #clearReconnectTimer(): void {
+        if (this.#reconnectTimer !== undefined) {
+            clearTimeout(this.#reconnectTimer);
+            this.#reconnectTimer = undefined;
+        }
+    }
+
+    #clearResumeInfo(): void {
+        this.resumeInfo.url = "";
+        this.resumeInfo.id = "";
+    }
 
     public async ping(): Promise<number> {
         if (typeof this.#ws === "undefined" || typeof this.#ws.ping !== "function") throw new Error("WebSocket is not connected");
         return new Promise((resolve, reject) => {
             const start = performance.now();
             const timeout = setTimeout(() => { reject(new Error("WebSocket ping timed out")); }, 5_000);
-            this.#ws?.addEventListener("pong", () => { clearTimeout(timeout); resolve(performance.now() - start); }, { once: true });
+            this.#ws?.addEventListener("pong", () => {
+                clearTimeout(timeout);
+                resolve(performance.now() - start);
+            }, { once: true });
             this.#ws?.ping();
         });
     }
@@ -285,8 +323,10 @@ export class ShardManager {
         for (let start = 0; start < count; start += concurrency) {
             const batch: Array<Promise<void>> = [];
             for (let id = start; id < Math.min(start + concurrency, count); id++) batch.push(this.#connectShard(id, count, url));
+            // eslint-disable-next-line no-await-in-loop
             await Promise.all(batch);
-            if (start + concurrency < count) await new Promise((resolve) => setTimeout(resolve, 5_000));
+            // eslint-disable-next-line no-await-in-loop
+            if (start + concurrency < count) await new Promise((resolve) => { setTimeout(resolve, 5_000); });
         }
     }
 
@@ -297,13 +337,15 @@ export class ShardManager {
             presence: this.#options.presence,
             reconnect: this.#options.reconnect,
             shard: [id, count]
-        }, (data) => this.#dispatch({ shardId: id, data }), this.#debug);
+        }, (data) => {
+            this.#dispatch({ shardId: id, data });
+        }, this.#debug);
         this.#shards.set(id, manager);
         await manager.connect(url);
     }
 
     public close(): void { for (const shard of this.#shards.values()) shard.close(); }
-    public async setPresence(presence: UpdatePresenceStructure): Promise<void> { for (const shard of this.#shards.values()) shard.updatePresence(presence); }
+    public setPresence(presence: UpdatePresenceStructure): void { for (const shard of this.#shards.values()) shard.updatePresence(presence); }
 
     async #getGatewayBot(): Promise<GetGatewayBotResponse> {
         const response = await fetch("https://discord.com/api/v10/gateway/bot", { headers: { Authorization: `Bot ${this.#options.token}` } });
