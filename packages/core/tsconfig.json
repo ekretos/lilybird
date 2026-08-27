@@ -3,16 +3,11 @@
     "compilerOptions": {
         "outDir": "dist",
         "baseUrl": ".",
+        "noImplicitOverride": false,
         "paths": {
-            "#enums": [
-                "./src/enums/index.ts"
-            ],
-            "#ws": [
-                "./src/ws/manager.ts"
-            ]
+            "#enums": ["./src/enums/index.ts"],
+            "#ws": ["./src/ws/manager.ts"]
         }
     },
-    "include": [
-        "src/**/*"
-    ]
+    "include": ["src/**/*"]
 }
