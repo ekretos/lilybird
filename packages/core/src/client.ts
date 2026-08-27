@@ -28,7 +28,7 @@ export class Client implements MockClient {
     public readonly declare sessionId: string;
     public readonly declare application: Application.Structure;
     protected readonly declare ready: boolean;
-    readonly #dispatch?: DispatchFunction;
+    #dispatch?: DispatchFunction;
 
     public constructor(options: ClientOptions, debug?: DebugFunction) {
         this.rest = options.useDebugRest === true ? new DebugREST(debug) : new REST();
