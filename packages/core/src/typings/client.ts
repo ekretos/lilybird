@@ -93,7 +93,10 @@ export type Transformer<T> = {
 };
 
 export interface Transformers {
-    raw?: { return: TransformerReturnType, handler: (data: ReceiveDispatchEvent) => unknown };
+    raw?: {
+        return: TransformerReturnType,
+        handler: (data: ReceiveDispatchEvent) => unknown
+    };
     ready?: Transformer<Ready["d"]>;
     resumed?: Transformer<undefined>;
     applicationCommandPermissionsUpdate?: Transformer<ApplicationCommandPermissionsUpdate["d"]>;
@@ -165,8 +168,19 @@ export interface SelectiveCache {
     delete?: CacheExecutionPolicy;
 }
 
-interface CacheWithoutTransformers { applyTransformers?: false; }
-interface CacheWithTransformers { applyTransformers: true; transformerTypes: { guild: unknown, channel: unknown, voiceState: unknown }; }
+interface CacheWithoutTransformers {
+    applyTransformers?: false;
+}
+
+interface CacheWithTransformers {
+    applyTransformers: true;
+    transformerTypes: {
+        guild: unknown,
+        channel: unknown,
+        voiceState: unknown
+    };
+}
+
 type ApplyTransformers = CacheWithTransformers | CacheWithoutTransformers;
 
 export interface BaseCachingStructure {
@@ -175,14 +189,33 @@ export interface BaseCachingStructure {
     enabled: {
         self?: CacheExecutionPolicy,
         guild?: boolean | SelectiveCache,
-        channel?: boolean | (SelectiveCache & { threads?: boolean | SelectiveCache }),
+        channel?: boolean | (SelectiveCache & {
+            threads?: boolean | SelectiveCache
+        }),
         voiceState?: CacheExecutionPolicy
     };
-    customKeys?: { guild_voice_states?: string, voice_state_user_id?: string, voice_state_channel_id?: string };
+    customKeys?: {
+        guild_voice_states?: string,
+        voice_state_user_id?: string,
+        voice_state_channel_id?: string
+    };
 }
-export interface ExternalCache extends BaseCachingStructure { delegate: CachingDelegationType.EXTERNAL; manager: CacheManagerStructure; safeToTransform?: boolean; }
-export interface TransformersCache extends BaseCachingStructure { delegate: CachingDelegationType.TRANSFORMERS; }
-export interface DefaultCache extends BaseCachingStructure { delegate: CachingDelegationType.DEFAULT; }
+
+export interface ExternalCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.EXTERNAL;
+    manager: CacheManagerStructure;
+    safeToTransform?: boolean;
+}
+
+export interface TransformersCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.TRANSFORMERS;
+}
+
+export interface DefaultCache extends BaseCachingStructure {
+    delegate: CachingDelegationType.DEFAULT;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export type ParseCachingManager<T extends ClientOptions<Transformers>> = T["caching"] extends {}
     ? T["caching"]["applyTransformers"] extends true
         ? T["caching"] extends { transformerTypes: (infer U extends CacheWithTransformers["transformerTypes"]) }
@@ -191,9 +224,8 @@ export type ParseCachingManager<T extends ClientOptions<Transformers>> = T["cach
             ? T["caching"]["manager"] & {}
             : CachingManager
     : never;
-export type DebugFunction = (identifier: DebugIdentifier, payload?: unknown) => any;
 
-export interface ShardOptions { id: number, count: number }
+export type DebugFunction = (identifier: DebugIdentifier, payload?: unknown) => any;
 
 export interface BaseClientOptions<T extends Transformers> {
     intents: number;
@@ -203,7 +235,6 @@ export interface BaseClientOptions<T extends Transformers> {
     caching?: (DefaultCache | ExternalCache | TransformersCache) & ApplyTransformers;
     useDebugRest?: boolean;
     setup?: (client: Client) => Awaitable<any>;
-    shard?: ShardOptions;
 }
 
 export interface ClientOptions<T extends Transformers> extends Omit<BaseClientOptions<T>, "intents"> {
