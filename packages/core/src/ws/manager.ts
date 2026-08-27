@@ -15,7 +15,7 @@ interface ManagerOptions {
 
 export type DispatchFunction = (data: ReceiveDispatchEvent) => any;
 type Socket = WebSocket & { ping?: () => void };
-type ResolvedManagerOptions = Omit<Required<ManagerOptions>, "shard"> & Pick<ManagerOptions, "shard">;
+type ResolvedManagerOptions = ManagerOptions & Required<Pick<ManagerOptions, "reconnect" | "maxReconnectAttempts" | "reconnectBaseDelay" | "reconnectMaxDelay">>;
 
 export class WebSocketManager {
     readonly #dispatch: DispatchFunction;
@@ -44,48 +44,19 @@ export class WebSocketManager {
             maxReconnectAttempts: Infinity,
             reconnectBaseDelay: 1_000,
             reconnectMaxDelay: 30_000,
-            shard: options.shard,
             ...options
         };
     }
 
-    public close(): void {
-        this.#closed = true;
-        this.#clearReconnectTimer();
-        this.#clearTimer();
-        this.#ws?.close(3000);
-        this.#ws = undefined;
-        this.#isResuming = false;
-        this.#heartbeatPending = false;
-    }
-
-    public async connect(url?: string): Promise<void> {
-        this.#closed = false;
-        this.#clearReconnectTimer();
-        await this.#connect(url ?? await this.#getGatewayUrl());
-    }
-
+    public close(): void { this.#closed = true; this.#clearReconnectTimer(); this.#clearTimer(); this.#ws?.close(3000); this.#ws = undefined; this.#isResuming = false; this.#heartbeatPending = false; }
+    public async connect(url?: string): Promise<void> { this.#closed = false; this.#clearReconnectTimer(); await this.#connect(url ?? await this.#getGatewayUrl()); }
     async #connect(url: string): Promise<void> {
-        const generation = ++this.#generation;
-        this.#clearTimer();
-        this.#heartbeatPending = false;
-        const ws = <Socket>new WebSocket(url);
-        this.#ws = ws;
+        const generation = ++this.#generation; this.#clearTimer(); this.#heartbeatPending = false; const ws = <Socket>new WebSocket(url); this.#ws = ws;
         ws.addEventListener("open", () => { if (generation !== this.#generation) return; this.#reconnectAttempts = 0; });
         ws.addEventListener("error", (err) => { if (generation !== this.#generation) return; this.#debug?.(DebugIdentifier.WSError, err); });
-        ws.addEventListener("close", ({ code }) => {
-            if (generation !== this.#generation) return;
-            this.#debug?.(DebugIdentifier.CloseCode, code); this.#clearTimer(); this.#heartbeatPending = false;
-            if (this.#closed || code === 3000) return;
-            if (code === 4004 || code === 4010 || code === 4011 || code === 4012 || code === 4013 || code === 4014) return;
-            if (code === 4007 || code === 4009) { this.#isResuming = false; this.#sequenceNumber = null; this.#clearResumeInfo(); }
-            if (code >= 4000 && code < 5000 && code !== 4007 && code !== 4008 && code !== 4009) { this.#scheduleReconnect(false); return; }
-            this.#scheduleReconnect(this.#canResume());
-        });
+        ws.addEventListener("close", ({ code }) => { if (generation !== this.#generation) return; this.#debug?.(DebugIdentifier.CloseCode, code); this.#clearTimer(); this.#heartbeatPending = false; if (this.#closed || code === 3000) return; if (code === 4004 || code === 4010 || code === 4011 || code === 4012 || code === 4013 || code === 4014) return; if (code === 4007 || code === 4009) { this.#isResuming = false; this.#sequenceNumber = null; this.#clearResumeInfo(); } if (code >= 4000 && code < 5000 && code !== 4007 && code !== 4008 && code !== 4009) { this.#scheduleReconnect(false); return; } this.#scheduleReconnect(this.#canResume()); });
         ws.addEventListener("message", (event) => {
-            if (generation !== this.#generation) return;
-            this.#debug?.(DebugIdentifier.WSMessage, event.data);
-            let payload: Payload;
+            if (generation !== this.#generation) return; this.#debug?.(DebugIdentifier.WSMessage, event.data); let payload: Payload;
             try { payload = <Payload>JSON.parse(String(event.data)); } catch { ws.close(1002); return; }
             if (typeof payload.s === "number") this.#sequenceNumber = payload.s;
             switch (payload.op) {
@@ -99,36 +70,16 @@ export class WebSocketManager {
             }
         });
     }
-
     async #getGatewayUrl(): Promise<string> {
-        if (typeof this.#gatewayInfo === "undefined") {
-            const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 15_000); let response: Response;
-            try { response = await fetch("https://discord.com/api/v10/gateway/bot", { headers: { Authorization: `Bot ${this.#options.token}` }, signal: controller.signal }); } finally { clearTimeout(timeout); }
-            if (!response.ok) throw new Error("An invalid Token was provided");
-            const data: GetGatewayBotResponse = await response.json() as never; data.url = `${data.url}/?v=10&encoding=json`; this.#gatewayInfo = data;
-        }
+        if (typeof this.#gatewayInfo === "undefined") { const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 15_000); let response: Response; try { response = await fetch("https://discord.com/api/v10/gateway/bot", { headers: { Authorization: `Bot ${this.#options.token}` }, signal: controller.signal }); } finally { clearTimeout(timeout); } if (!response.ok) throw new Error("An invalid Token was provided"); const data: GetGatewayBotResponse = await response.json() as never; data.url = `${data.url}/?v=10&encoding=json`; this.#gatewayInfo = data; }
         return this.#gatewayInfo.url;
     }
-
     #canResume(): boolean { return typeof this.resumeInfo.id === "string" && this.resumeInfo.id.length > 0 && this.#sequenceNumber !== null; }
-    #scheduleReconnect(resume: boolean): void {
-        if (!this.#options.reconnect || this.#closed || this.#reconnectTimer !== undefined || this.#reconnectAttempts >= this.#options.maxReconnectAttempts) return;
-        this.#isResuming = resume && this.#canResume(); const attempt = this.#reconnectAttempts++;
-        const exponential = Math.min(this.#options.reconnectBaseDelay * 2 ** attempt, this.#options.reconnectMaxDelay);
-        const delay = exponential + Math.floor(Math.random() * Math.min(1_000, exponential * 0.25));
-        this.#reconnectTimer = setTimeout(async () => { this.#reconnectTimer = undefined; if (this.#closed) return; try { const url = this.#isResuming && this.resumeInfo.url.length > 0 ? `${this.resumeInfo.url}/?v=10&encoding=json` : await this.#getGatewayUrl(); await this.#connect(url); } catch { this.#scheduleReconnect(this.#isResuming); } }, delay);
-    }
+    #scheduleReconnect(resume: boolean): void { if (!this.#options.reconnect || this.#closed || this.#reconnectTimer !== undefined || this.#reconnectAttempts >= this.#options.maxReconnectAttempts) return; this.#isResuming = resume && this.#canResume(); const attempt = this.#reconnectAttempts++; const exponential = Math.min(this.#options.reconnectBaseDelay * 2 ** attempt, this.#options.reconnectMaxDelay); const delay = exponential + Math.floor(Math.random() * Math.min(1_000, exponential * 0.25)); this.#reconnectTimer = setTimeout(async () => { this.#reconnectTimer = undefined; if (this.#closed) return; try { const url = this.#isResuming && this.resumeInfo.url.length > 0 ? `${this.resumeInfo.url}/?v=10&encoding=json` : await this.#getGatewayUrl(); await this.#connect(url); } catch { this.#scheduleReconnect(this.#isResuming); } }, delay); }
     #sendHeartbeatPayload(): void { if (typeof this.#ws === "undefined" || this.#ws.readyState !== WebSocket.OPEN) return; this.#gotACK = false; this.#heartbeatPending = true; this.#ws.send(JSON.stringify({ op: GatewayOpCode.Heartbeat, d: this.#sequenceNumber, s: null, t: null })); }
-    #identify(): void {
-        if (typeof this.#options.token === "undefined") throw new Error("No token was found");
-        const payload: Identify = { op: GatewayOpCode.Identify, d: { token: this.#options.token, intents: this.#options.intents, properties: { os: process.platform, browser: "Lilybird", device: "Lilybird" }, presence: this.#options.presence, shard: this.#options.shard }, s: null, t: null };
-        this.#debug?.(DebugIdentifier.Identify); this.#ws?.send(JSON.stringify(payload));
-    }
+    #identify(): void { if (typeof this.#options.token === "undefined") throw new Error("No token was found"); const payload: Identify = { op: GatewayOpCode.Identify, d: { token: this.#options.token, intents: this.#options.intents, properties: { os: process.platform, browser: "Lilybird", device: "Lilybird" }, presence: this.#options.presence, shard: this.#options.shard }, s: null, t: null }; this.#debug?.(DebugIdentifier.Identify); this.#ws?.send(JSON.stringify(payload)); }
     #resume(): void { if (!this.#canResume()) { this.#isResuming = false; this.#identify(); return; } const payload: Resume = { op: GatewayOpCode.Resume, d: { token: this.#options.token, session_id: this.resumeInfo.id, seq: this.#sequenceNumber as number }, s: null, t: null }; this.#debug?.(DebugIdentifier.Resume); this.#ws?.send(JSON.stringify(payload)); }
-    #startTimer(interval: number): void {
-        this.#clearTimer(); this.#gotACK = true; this.#heartbeatPending = false;
-        this.#timer = setInterval(() => { if (this.#heartbeatPending && !this.#gotACK) { this.#debug?.(DebugIdentifier.MissingACK); this.#debug?.(DebugIdentifier.ZombieConnection); this.#ws?.close(1001); return; } this.#debug?.(DebugIdentifier.Heartbeat); this.#sendHeartbeatPayload(); }, Math.max(1, Math.floor(Math.random() * interval)));
-    }
+    #startTimer(interval: number): void { this.#clearTimer(); this.#gotACK = true; this.#heartbeatPending = false; this.#timer = setInterval(() => { if (this.#heartbeatPending && !this.#gotACK) { this.#debug?.(DebugIdentifier.MissingACK); this.#debug?.(DebugIdentifier.ZombieConnection); this.#ws?.close(1001); return; } this.#debug?.(DebugIdentifier.Heartbeat); this.#sendHeartbeatPayload(); }, Math.max(1, Math.floor(Math.random() * interval))); }
     #clearTimer(): void { if (this.#timer !== undefined) { clearInterval(this.#timer); this.#timer = undefined; } }
     #clearReconnectTimer(): void { if (this.#reconnectTimer !== undefined) { clearTimeout(this.#reconnectTimer); this.#reconnectTimer = undefined; } }
     #clearResumeInfo(): void { this.resumeInfo.url = ""; this.resumeInfo.id = ""; }
@@ -146,12 +97,7 @@ export class ShardManager {
     public get size(): number { return this.#shards.size; }
     public get shards(): ReadonlyMap<number, WebSocketManager> { return this.#shards; }
     public get gatewayInfo(): GetGatewayBotResponse | undefined { return this.#gateway; }
-    public async connect(): Promise<void> {
-        this.#gateway = await this.#getGatewayBot(); const count = this.#options.shardCount ?? this.#gateway.shards;
-        if (!Number.isInteger(count) || count < 1 || count > this.#gateway.shards) throw new Error(`Invalid shard count: ${count}`);
-        const concurrency = Math.max(1, Math.min(this.#options.maxConcurrency ?? this.#gateway.session_start_limit.max_concurrency, this.#gateway.session_start_limit.max_concurrency)); const url = `${this.#gateway.url}/?v=10&encoding=json`;
-        for (let start = 0; start < count; start += concurrency) { const batch: Array<Promise<void>> = []; for (let id = start; id < Math.min(start + concurrency, count); id++) batch.push(this.#connectShard(id, count, url)); await Promise.all(batch); if (start + concurrency < count) await new Promise((resolve) => setTimeout(resolve, 5_000)); }
-    }
+    public async connect(): Promise<void> { this.#gateway = await this.#getGatewayBot(); const count = this.#options.shardCount ?? this.#gateway.shards; if (!Number.isInteger(count) || count < 1 || count > this.#gateway.shards) throw new Error(`Invalid shard count: ${count}`); const concurrency = Math.max(1, Math.min(this.#options.maxConcurrency ?? this.#gateway.session_start_limit.max_concurrency, this.#gateway.session_start_limit.max_concurrency)); const url = `${this.#gateway.url}/?v=10&encoding=json`; for (let start = 0; start < count; start += concurrency) { const batch: Array<Promise<void>> = []; for (let id = start; id < Math.min(start + concurrency, count); id++) batch.push(this.#connectShard(id, count, url)); await Promise.all(batch); if (start + concurrency < count) await new Promise((resolve) => setTimeout(resolve, 5_000)); } }
     async #connectShard(id: number, count: number, url: string): Promise<void> { const manager = new WebSocketManager({ token: this.#options.token, intents: this.#options.intents, presence: this.#options.presence, reconnect: this.#options.reconnect, shard: [id, count] }, (data) => this.#dispatch({ shardId: id, data }), this.#debug); this.#shards.set(id, manager); await manager.connect(url); }
     public close(): void { for (const shard of this.#shards.values()) shard.close(); }
     public async setPresence(presence: UpdatePresenceStructure): Promise<void> { for (const shard of this.#shards.values()) shard.updatePresence(presence); }
