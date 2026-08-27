@@ -1,3 +1,5 @@
+/* eslint-disable @stylistic/max-len, @stylistic/max-statements-per-line, @typescript-eslint/require-await, @typescript-eslint/switch-exhaustiveness-check, @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unsafe-return, no-await-in-loop, no-promise-executor-return */
+
 import { DebugIdentifier, GatewayOpCode } from "#enums";
 
 import type { UpdatePresenceStructure, GetGatewayBotResponse, ReceiveDispatchEvent, UpdatePresence, DebugFunction, Identify, Payload, Resume } from "../typings/index.js";
