@@ -37,31 +37,68 @@ export interface DiscordErrorMessage {
 export class RestError extends Error {
     public readonly code: number;
     public readonly errors: DiscordErrorMessage["errors"];
+    public readonly status: number;
 
-    public constructor(error: DiscordErrorMessage) {
+    public constructor(error: DiscordErrorMessage, status: number) {
         super(error.message);
-
+        this.name = "RestError";
         this.code = error.code;
         this.errors = error.errors;
+        this.status = status;
+    }
+}
+
+export class RestRateLimitError extends RestError {
+    public readonly retryAfter: number;
+    public readonly global: boolean;
+
+    public constructor(error: DiscordErrorMessage, status: number, retryAfter: number, global: boolean) {
+        super(error, status);
+        this.name = "RestRateLimitError";
+        this.retryAfter = retryAfter;
+        this.global = global;
+    }
+}
+
+export class RestNetworkError extends Error {
+    public readonly cause: unknown;
+
+    public constructor(cause: unknown) {
+        super(cause instanceof Error ? cause.message : "REST request failed");
+        this.name = "RestNetworkError";
+        this.cause = cause;
     }
 }
 
 // I ran out of ideas for naming this thing
 type ExtractedData = ({ data: { attachments: Array<unknown> | undefined } } | { attachments: Array<unknown> | undefined }) & { reason?: string };
 
+type RequestMethod = "GET" | "POST" | "PATCH" | "DELETE" | "PUT";
+
+interface RESTOptions {
+    timeout?: number;
+    maxRetries?: number;
+}
+
 export class REST {
     // eslint-disable-next-line @typescript-eslint/naming-convention
     public static readonly BaseURL = "https://discord.com/api/v10/";
+    public static readonly DefaultTimeout = 15_000;
+    public static readonly DefaultMaxRetries = 3;
 
     #token?: string | undefined;
+    readonly #timeout: number;
+    readonly #maxRetries: number;
 
-    public constructor(token?: string) {
+    public constructor(token?: string, options: RESTOptions = {}) {
         this.#token = token;
+        this.#timeout = options.timeout ?? REST.DefaultTimeout;
+        this.#maxRetries = Math.max(0, options.maxRetries ?? REST.DefaultMaxRetries);
     }
 
-    public async makeAPIRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT", path: string, data: FormData, reason?: string): Promise<T>;
-    public async makeAPIRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT", path: string, data?: Record<string, any>, files?: Array<LilybirdAttachment>): Promise<T>;
-    public async makeAPIRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT", path: string, data?: Record<string, any> | FormData, filesOrReason?: string | Array<LilybirdAttachment>): Promise<T> {
+    public async makeAPIRequest<T>(method: RequestMethod, path: string, data: FormData, reason?: string): Promise<T>;
+    public async makeAPIRequest<T>(method: RequestMethod, path: string, data?: Record<string, any>, files?: Array<LilybirdAttachment>): Promise<T>;
+    public async makeAPIRequest<T>(method: RequestMethod, path: string, data?: Record<string, any> | FormData, filesOrReason?: string | Array<LilybirdAttachment>): Promise<T> {
         const opts: RequestInit = {
             method,
             headers: {
@@ -112,24 +149,83 @@ export class REST {
             }
         }
 
-        const response = await fetch(`${REST.BaseURL}${path}`, opts);
-
-        if (!response.ok) {
-            const errorMessage: DiscordErrorMessage = await response.json() as never;
-            throw new RestError(errorMessage);
-        }
-
-        /*
-            This assertion is a bit dangerous to make
-            but since this is internal we should be fine
-        */
-        if (response.status === 204) return <T>null;
-
-        return <T> await response.json();
+        return this.#request<T>(method, path, opts);
     }
 
     public setToken(token: string | undefined): void {
         this.#token = token;
+    }
+
+    #isRetryable(method: RequestMethod, status: number): boolean {
+        if (method === "GET" || method === "PUT" || method === "DELETE") return status === 429 || status >= 500;
+        return false;
+    }
+
+    #backoff(attempt: number): number {
+        return Math.min(1_000 * 2 ** attempt, 10_000) + Math.floor(Math.random() * 250);
+    }
+
+    async #request<T>(method: RequestMethod, path: string, opts: RequestInit): Promise<T> {
+        for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.#timeout);
+            opts.signal = controller.signal;
+
+            let response: Response;
+            try {
+                response = await fetch(`${REST.BaseURL}${path}`, opts);
+            } catch (error) {
+                if (attempt < this.#maxRetries && method === "GET") {
+                    clearTimeout(timeout);
+                    await new Promise((resolve) => setTimeout(resolve, this.#backoff(attempt)));
+                    continue;
+                }
+
+                clearTimeout(timeout);
+                throw new RestNetworkError(error);
+            }
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                if (response.status === 204) return <T>null;
+                return <T> await response.json();
+            }
+
+            let errorMessage: DiscordErrorMessage;
+            try {
+                errorMessage = await response.json() as DiscordErrorMessage;
+            } catch {
+                errorMessage = {
+                    code: response.status,
+                    message: response.statusText || "Discord API request failed"
+                };
+            }
+
+            if (response.status === 429) {
+                const retryAfterHeader = response.headers.get("Retry-After");
+                const retryAfterBody = typeof (errorMessage as DiscordErrorMessage & { retry_after?: number }).retry_after === "number"
+                    ? (errorMessage as DiscordErrorMessage & { retry_after: number }).retry_after
+                    : undefined;
+                const retryAfter = retryAfterBody ?? (retryAfterHeader ? Number(retryAfterHeader) * 1_000 : 1_000);
+                const global = (errorMessage as DiscordErrorMessage & { global?: boolean }).global === true;
+
+                if (attempt < this.#maxRetries) {
+                    await new Promise((resolve) => setTimeout(resolve, Math.max(0, retryAfter)));
+                    continue;
+                }
+
+                throw new RestRateLimitError(errorMessage, response.status, retryAfter, global);
+            }
+
+            if (response.status >= 500 && attempt < this.#maxRetries && this.#isRetryable(method, response.status)) {
+                await new Promise((resolve) => setTimeout(resolve, this.#backoff(attempt)));
+                continue;
+            }
+
+            throw new RestError(errorMessage, response.status);
+        }
+
+        throw new Error("REST request retry limit exceeded");
     }
 
     //#region Gateway
@@ -1032,7 +1128,7 @@ export class REST {
         return this.makeAPIRequest("POST", `channels/${channelId}/polls/${messageId}/expire`);
     }
 
-    //#endregion
+    //#endregion Poll
     //#region Stage Instance
     public async createStageInstance(instance: StageInstance.CreateJSONParams): Promise<StageInstance.Structure> {
         return this.makeAPIRequest("POST", "stage-instances", instance);
@@ -1050,7 +1146,7 @@ export class REST {
         return this.makeAPIRequest("DELETE", `stage-instances/${channelId}`, { reason });
     }
 
-    //#endregion
+    //#endregion Stage Instance
     //#region Sticker
     public async getSticker(stickerId: string): Promise<Sticker.Structure> {
         return this.makeAPIRequest("GET", `stickers/${stickerId}`);
@@ -1154,7 +1250,7 @@ export class REST {
         return this.makeAPIRequest("GET", `guilds/${guildId}/voice-states/${userId}`);
     }
 
-    //#endregion
+    //#endregion Voice
     //#region Webhook
     public async createWebhook(channelId: string, webhook: { name: string, avatar?: ImageData | null }): Promise<Webhook.Structure> {
         return this.makeAPIRequest("POST", `channels/${channelId}/webhooks`, webhook);
@@ -1260,14 +1356,9 @@ export class DebugREST extends REST {
         this.#debug = debug ?? (() => {});
     }
 
-    public override async makeAPIRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT", path: string, data: FormData, reason?: string): Promise<T>;
-    public override async makeAPIRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT", path: string, data?: Record<string, any>, files?: Array<LilybirdAttachment>): Promise<T>;
-    public override async makeAPIRequest<T>(
-        method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT",
-        path: string,
-        data?: FormData | Record<string, any>,
-        filesOrReason?: string | Array<LilybirdAttachment>
-    ): Promise<T> {
+    public override async makeAPIRequest<T>(method: RequestMethod, path: string, data: FormData, reason?: string): Promise<T>;
+    public override async makeAPIRequest<T>(method: RequestMethod, path: string, data?: Record<string, any>, files?: Array<LilybirdAttachment>): Promise<T>;
+    public override async makeAPIRequest<T>(method: RequestMethod, path: string, data?: FormData | Record<string, any>, filesOrReason?: string | Array<LilybirdAttachment>): Promise<T> {
         this.#debug(DebugIdentifier.RESTCall, { method, path, data, filesOrReason });
         try {
             return await super.makeAPIRequest(<never>method, <never>path, <never> data, <never>filesOrReason);
