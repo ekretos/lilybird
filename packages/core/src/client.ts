@@ -35,8 +35,15 @@ export class Client<T extends Transformers = Transformers, C extends CacheManage
         this.cache = typeof options.cachingManager !== "undefined" ? <C>options.cachingManager : <C><unknown> new CachingManager();
         this.#dispatch = options.dispatch;
         this.ws = new WebSocketManager(
-            { intents: Array.isArray(options.intents) ? options.intents.reduce((acc, cur) => acc | cur, 0) : options.intents, presence: options.presence },
-            (payload) => this.#dispatch?.(payload),
+            {
+                intents: Array.isArray(options.intents)
+                    ? options.intents.reduce((acc, cur) => acc | cur, 0)
+                    : options.intents,
+                presence: options.presence
+            },
+            (payload) => {
+                void this.#dispatch?.(payload);
+            },
             debug
         );
     }
@@ -58,29 +65,11 @@ export class Client<T extends Transformers = Transformers, C extends CacheManage
     public async ping(): Promise<{ ws: number, rest: number }> {
         const start = performance.now();
         await this.rest.getGateway();
-        return { ws: await this.ws.ping(), rest: performance.now() - start };
+        const final = performance.now() - start;
+
+        return {
+            ws: await this.ws.ping(),
+            rest: final
+        };
     }
-}
-
-export interface CreateClientOptions<T extends Transformers> extends Omit<ClientOptions<T>, "dispatch">, CompilerOptions<T> {
-    token: string;
-    listeners: Listeners<Client<T>, T>;
-    caching?: CachingOptions;
-    debug?: DebugFunction;
-}
-
-export async function createClient<T extends Transformers<Client<any>> = Transformers<Client<any>>>(options: CreateClientOptions<T>): Promise<Client<T>> {
-    const compiler = new ListenerCompiler<Client<T>, T>({ transformers: options.transformers, transformClient: options.transformClient });
-    compiler.addListenersFromObject(options.listeners);
-    if (typeof options.caching !== "undefined") compiler.appendCachingHandlers(options.caching);
-
-    const client = new Client<T>({
-        intents: options.intents,
-        presence: options.presence,
-        useDebugRest: typeof options.debug !== "undefined",
-        cachingManager: options.cachingManager
-    }, options.debug);
-
-    await client.login(options.token, compiler.getDispatchFunction(client, client.ws.resumeInfo));
-    return client;
 }
